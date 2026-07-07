@@ -11,10 +11,18 @@ import os
 from pathlib import Path
 
 import config_proxy
+import startup_manager
 from trigger_engine import TriggerEngine
 
 APP_STATE_FILE = Path(__file__).resolve().with_name("bindx_config.json")
-DEFAULT_APP_STATE = {"hotkey_running": True, "mouse_running": True}
+DEFAULT_APP_STATE = {
+    "hotkey_running": True,
+    "mouse_running": True,
+    "window_size": None,
+    "window_zoomed": False,
+    "font_preset": "常规",
+    "autostart_enabled": False,
+}
 
 
 def load_app_state():
@@ -25,7 +33,26 @@ def load_app_state():
     except (OSError, json.JSONDecodeError):
         return dict(DEFAULT_APP_STATE)
     merged = dict(DEFAULT_APP_STATE)
-    merged.update({k: bool(v) for k, v in state.items() if k in DEFAULT_APP_STATE})
+    merged["hotkey_running"] = bool(state.get("hotkey_running", DEFAULT_APP_STATE["hotkey_running"]))
+    merged["mouse_running"] = bool(state.get("mouse_running", DEFAULT_APP_STATE["mouse_running"]))
+    size = state.get("window_size")
+    if not (isinstance(size, str) and size):
+        legacy_geometry = state.get("window_geometry")
+        if isinstance(legacy_geometry, str) and "x" in legacy_geometry:
+            size = legacy_geometry.split("+", 1)[0]
+    merged["window_size"] = size if isinstance(size, str) and size else None
+    merged["window_zoomed"] = bool(state.get("window_zoomed", DEFAULT_APP_STATE["window_zoomed"]))
+    font_preset = state.get("font_preset", DEFAULT_APP_STATE["font_preset"])
+    legacy_font_map = {
+        "标准": "常规",
+        "大": "特大",
+        "特大": "超大",
+    }
+    font_preset = legacy_font_map.get(font_preset, font_preset)
+    if font_preset not in {"紧凑", "稍小", "常规", "特大", "超大"}:
+        font_preset = DEFAULT_APP_STATE["font_preset"]
+    merged["font_preset"] = font_preset
+    merged["autostart_enabled"] = bool(state.get("autostart_enabled", DEFAULT_APP_STATE["autostart_enabled"]))
     return merged
 
 
@@ -61,6 +88,7 @@ class BindXController:
             keyboard_enabled=self.hk_running,
             mouse_enabled=self.mc_running,
         )
+        self._sync_autostart_state()
 
     def set_hotkey_self_callback(self, callback):
         self.hotkey_manager.set_self_callback(callback)
@@ -82,6 +110,45 @@ class BindXController:
 
     def _save_engine_state(self):
         save_app_state(self.app_state)
+
+    def save_window_state(self, size=None, zoomed=None):
+        if size is not None:
+            self.app_state["window_size"] = size
+        if zoomed is not None:
+            self.app_state["window_zoomed"] = bool(zoomed)
+        self._save_engine_state()
+
+    def save_font_preset(self, font_preset):
+        if font_preset not in {"紧凑", "稍小", "常规", "特大", "超大"}:
+            return
+        self.app_state["font_preset"] = font_preset
+        self._save_engine_state()
+
+    def _sync_autostart_state(self):
+        self.app_state["autostart_enabled"] = startup_manager.is_enabled()
+        self._save_engine_state()
+
+    def get_autostart_enabled(self):
+        enabled = startup_manager.is_enabled()
+        if self.app_state.get("autostart_enabled") != enabled:
+            self.app_state["autostart_enabled"] = enabled
+            self._save_engine_state()
+        return enabled
+
+    def set_autostart_enabled(self, enabled):
+        try:
+            if enabled:
+                startup_manager.enable()
+            else:
+                startup_manager.disable()
+        except OSError as exc:
+            actual = startup_manager.is_enabled()
+            self.app_state["autostart_enabled"] = actual
+            self._save_engine_state()
+            return False, str(exc)
+        self.app_state["autostart_enabled"] = bool(enabled)
+        self._save_engine_state()
+        return True, None
 
     def start_hotkey(self, persist=True):
         if self.hotkey_manager is None:

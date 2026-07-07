@@ -23,6 +23,7 @@ from tkinter import ttk, messagebox
 import customtkinter as ctk
 
 import config_proxy
+import shortcut_manager
 from tray import TrayIcon
 
 _hk_gui = config_proxy.hk_gui_module()
@@ -35,6 +36,10 @@ AddMappingDialog = _mc_gui.AddMappingDialog
 
 ctk.set_appearance_mode("system")
 ctk.set_default_color_theme("blue")
+
+BUTTON_THEME = ctk.ThemeManager.theme["CTkButton"]
+BUTTON_DEFAULT_FG = tuple(BUTTON_THEME["fg_color"])
+BUTTON_DEFAULT_HOVER = tuple(BUTTON_THEME["hover_color"])
 
 
 def _clamp(value, low, high):
@@ -59,6 +64,37 @@ def scaled(widget, value):
 
 def ui_font(widget, size, weight=None):
     return ctk.CTkFont(family="Microsoft YaHei UI", size=scaled(widget, size), weight=weight)
+
+
+FONT_PRESET_TABLE_SIZE = {
+    "紧凑": 16,
+    "稍小": 19,
+    "常规": 22,
+    "特大": 26,
+    "超大": 30,
+}
+
+FONT_PRESET_TRAY_SIZE = {
+    "紧凑": 16,
+    "稍小": 19,
+    "常规": 22,
+    "特大": 26,
+    "超大": 30,
+}
+
+
+def _parse_window_size(value):
+    if not isinstance(value, str) or "x" not in value:
+        return None
+    width_text, height_text = value.split("x", 1)
+    try:
+        width = int(width_text)
+        height = int(height_text)
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
 
 
 class OverviewTab(ctk.CTkFrame):
@@ -101,37 +137,143 @@ class OverviewTab(ctk.CTkFrame):
         action_row.pack(fill=tk.X, padx=16, pady=(0, 16))
         ctk.CTkButton(action_row, text="全部启动", command=self._start_all, width=96).pack(side=tk.LEFT, padx=(0, 8))
         ctk.CTkButton(action_row, text="全部停止", command=self._stop_all, width=96, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(action_row, text="重置窗口", command=self.app._reset_window_layout, width=96, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
         ctk.CTkButton(action_row, text="退出 BindX", command=self.app._quit_app, width=104, fg_color="#991b1b", hover_color="#7f1d1d").pack(side=tk.RIGHT)
 
-        self.refresh()
+        font_row = ctk.CTkFrame(actions, fg_color="transparent")
+        font_row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        ctk.CTkLabel(font_row, text="字体大小", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(0, 12))
+        self.font_preset_menu = ctk.CTkOptionMenu(
+            font_row,
+            values=["紧凑", "稍小", "常规", "特大", "超大"],
+            command=self.app._change_font_preset,
+            width=120,
+            font=ui_font(self, 14),
+        )
+        self.font_preset_menu.pack(side=tk.LEFT)
+        self.font_preset_menu.set(self.app._get_font_preset())
+
+        startup_row = ctk.CTkFrame(actions, fg_color="transparent")
+        startup_row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        ctk.CTkLabel(startup_row, text="开机启动", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(0, 12))
+        self.autostart_var = tk.BooleanVar(value=self.controller.get_autostart_enabled())
+        self.autostart_switch = ctk.CTkSwitch(
+            startup_row,
+            text="登录后后台运行",
+            variable=self.autostart_var,
+            onvalue=True,
+            offvalue=False,
+            command=self._toggle_autostart,
+            font=ui_font(self, 14),
+        )
+        self.autostart_switch.pack(side=tk.LEFT)
+
+        shortcut_row = ctk.CTkFrame(actions, fg_color="transparent")
+        shortcut_row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        ctk.CTkLabel(shortcut_row, text="快捷方式", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(0, 12))
+        self.desktop_shortcut_btn = ctk.CTkButton(shortcut_row, text="创建桌面图标", command=self._toggle_desktop_shortcut, width=128)
+        self.desktop_shortcut_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.start_menu_shortcut_btn = ctk.CTkButton(
+            shortcut_row,
+            text="创建开始菜单图标",
+            command=self._toggle_start_menu_shortcut,
+            width=152,
+        )
+        self.start_menu_shortcut_btn.pack(side=tk.LEFT)
+
+        self.refresh_shortcut_buttons()
+        self.refresh_status()
 
     def _start_hk(self):
         self.controller.start_hotkey()
-        self.refresh()
+        self.refresh_status()
 
     def _stop_hk(self):
         self.controller.stop_hotkey()
-        self.refresh()
+        self.refresh_status()
 
     def _start_mc(self):
         self.controller.start_mouse()
-        self.refresh()
+        self.refresh_status()
 
     def _stop_mc(self):
         self.controller.stop_mouse()
-        self.refresh()
+        self.refresh_status()
 
     def _start_all(self):
         self.controller.start_hotkey()
         self.controller.start_mouse()
-        self.refresh()
+        self.refresh_status()
 
     def _stop_all(self):
         self.controller.stop_hotkey()
         self.controller.stop_mouse()
-        self.refresh()
+        self.refresh_status()
 
-    def refresh(self):
+    def _toggle_autostart(self):
+        desired = bool(self.autostart_var.get())
+        success, error = self.controller.set_autostart_enabled(desired)
+        if not success:
+            self.autostart_var.set(self.controller.get_autostart_enabled())
+            messagebox.showerror("开机启动", f"设置开机启动失败：\n{error}")
+            return
+        self.autostart_var.set(self.controller.get_autostart_enabled())
+
+    def _toggle_desktop_shortcut(self):
+        exists = shortcut_manager.desktop_shortcut_exists()
+        try:
+            if exists:
+                shortcut_manager.remove_desktop_shortcut()
+            else:
+                shortcut_path = shortcut_manager.create_desktop_shortcut()
+        except OSError as exc:
+            action = "删除桌面图标" if exists else "创建桌面图标"
+            messagebox.showerror(action, f"操作失败：\n{exc}")
+            return
+        self.refresh_shortcut_buttons()
+        if exists:
+            messagebox.showinfo("删除桌面图标", "桌面快捷方式已删除。")
+        else:
+            messagebox.showinfo("创建桌面图标", f"桌面快捷方式已创建：\n{shortcut_path}")
+
+    def _toggle_start_menu_shortcut(self):
+        exists = shortcut_manager.start_menu_shortcut_exists()
+        try:
+            if exists:
+                shortcut_manager.remove_start_menu_shortcut()
+            else:
+                shortcut_path = shortcut_manager.create_start_menu_shortcut()
+        except OSError as exc:
+            action = "删除开始菜单图标" if exists else "创建开始菜单图标"
+            messagebox.showerror(action, f"操作失败：\n{exc}")
+            return
+        self.refresh_shortcut_buttons()
+        if exists:
+            messagebox.showinfo("删除开始菜单图标", "开始菜单快捷方式已删除。")
+        else:
+            messagebox.showinfo(
+                "创建开始菜单图标",
+                f"开始菜单快捷方式已创建：\n{shortcut_path}\n\n现在可以在开始菜单里找到 BindX，再手动固定。",
+            )
+
+    def refresh_shortcut_buttons(self):
+        desktop_exists = shortcut_manager.desktop_shortcut_exists()
+        start_menu_exists = shortcut_manager.start_menu_shortcut_exists()
+        self.desktop_shortcut_btn.configure(
+            text="删除桌面图标" if desktop_exists else "创建桌面图标",
+            fg_color=BUTTON_DEFAULT_FG if desktop_exists else "#52525b",
+            hover_color=BUTTON_DEFAULT_HOVER if desktop_exists else "#3f3f46",
+        )
+        self.start_menu_shortcut_btn.configure(
+            text="删除开始菜单图标" if start_menu_exists else "创建开始菜单图标",
+            fg_color=BUTTON_DEFAULT_FG if start_menu_exists else "#52525b",
+            hover_color=BUTTON_DEFAULT_HOVER if start_menu_exists else "#3f3f46",
+        )
+
+    def refresh_status(self):
+        current_autostart = bool(self.controller.app_state.get("autostart_enabled", False))
+        if self.autostart_var.get() != current_autostart:
+            self.autostart_var.set(current_autostart)
         if self.controller.hk_running:
             enabled_entries = [e for e in self.controller.hotkey_manager.entries if e.get("enabled", True)]
             registered = sum(1 for e in enabled_entries if e.get("registered"))
@@ -1006,6 +1148,7 @@ class BindXApp(ctk.CTk):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
+        self._default_geometry = None
         self.ui_scale = _compute_ui_scale(self)
         ctk.set_widget_scaling(self.ui_scale)
         ctk.set_window_scaling(self.ui_scale)
@@ -1014,13 +1157,21 @@ class BindXApp(ctk.CTk):
         self.title("BindX")
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        max_w = max(1, int(screen_w * 0.92))
-        max_h = max(1, int(screen_h * 0.88))
-        default_w = min(max(scaled(self, 980), int(screen_w * 0.72)), max_w)
-        default_h = min(max(scaled(self, 640), int(screen_h * 0.72)), max_h)
-        self.geometry(f"{default_w}x{default_h}")
-        self.minsize(min(scaled(self, 860), max_w), min(scaled(self, 540), max_h))
+        logical_screen_w = max(1, int(round(screen_w / self.ui_scale)))
+        logical_screen_h = max(1, int(round(screen_h / self.ui_scale)))
+        max_w = max(1, int(logical_screen_w * 0.92))
+        max_h = max(1, int(logical_screen_h * 0.88))
+        default_w = min(max(980, int(logical_screen_w * 0.72)), max_w)
+        default_h = min(max(640, int(logical_screen_h * 0.72)), max_h)
+        self._window_min_w = min(860, max_w)
+        self._window_min_h = min(540, max_h)
+        self._window_max_w = max_w
+        self._window_max_h = max_h
+        self._default_geometry = f"{default_w}x{default_h}"
+        self.geometry(self._default_geometry)
+        self.minsize(self._window_min_w, self._window_min_h)
         self.configure(fg_color=("#f4f4f5", "#18181b"))
+        self._restore_window_state()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._setup_tree_style()
@@ -1068,6 +1219,7 @@ class BindXApp(ctk.CTk):
         self._poll_hotkeys()
         self._refresh_status_loop()
         self._resize_after_id = None
+        self._window_state_after_id = None
         self.bind("<Configure>", self._on_window_configure)
 
     def _setup_tree_style(self):
@@ -1091,19 +1243,15 @@ class BindXApp(ctk.CTk):
         self._apply_adaptive_table_style()
 
     def _table_font_size(self):
-        width = max(self.winfo_width(), int(self.winfo_screenwidth() * 0.72))
-        height = max(self.winfo_height(), int(self.winfo_screenheight() * 0.72))
-        size_by_height = 15 + (height - 640) / 240
-        size_by_width = 15 + (width - 980) / 360
-        return int(round(_clamp(max(size_by_height, size_by_width), 14, 18)))
+        return FONT_PRESET_TABLE_SIZE.get(self._get_font_preset(), FONT_PRESET_TABLE_SIZE["常规"])
 
     def _apply_adaptive_table_style(self):
         base_size = self._table_font_size()
         font_size = scaled(self, base_size)
-        rowheight = scaled(self, int(base_size * 3.15))
+        rowheight = scaled(self, int(base_size * 3.0))
         style = ttk.Style(self)
         style.configure("Treeview", font=("Microsoft YaHei UI", font_size), rowheight=rowheight)
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", font_size, "bold"))
+        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", font_size + scaled(self, 1), "bold"))
 
     def _on_window_configure(self, event):
         if event.widget is not self:
@@ -1111,6 +1259,59 @@ class BindXApp(ctk.CTk):
         if self._resize_after_id is not None:
             self.after_cancel(self._resize_after_id)
         self._resize_after_id = self.after(120, self._apply_adaptive_table_style)
+        if self._window_state_after_id is not None:
+            self.after_cancel(self._window_state_after_id)
+        self._window_state_after_id = self.after(240, self._persist_window_state)
+
+    def _restore_window_state(self):
+        size = self._normalize_window_size(self.controller.app_state.get("window_size"))
+        if size:
+            try:
+                self.geometry(size)
+            except tk.TclError:
+                self.geometry(self._default_geometry)
+        if self.controller.app_state.get("window_zoomed"):
+            try:
+                self.state("zoomed")
+            except tk.TclError:
+                pass
+
+    def _persist_window_state(self):
+        self._window_state_after_id = None
+        state = self.state()
+        zoomed = state == "zoomed"
+        if state == "withdrawn":
+            return
+        size = self._current_window_size()
+        if zoomed:
+            size = self.controller.app_state.get("window_size") or self._default_geometry
+        self.controller.save_window_state(size=size, zoomed=zoomed)
+
+    def _reset_window_layout(self):
+        self.deiconify()
+        try:
+            self.state("normal")
+        except tk.TclError:
+            pass
+        self.geometry(self._default_geometry)
+        self.update_idletasks()
+        self.controller.save_window_state(size=self._default_geometry, zoomed=False)
+        self._apply_adaptive_table_style()
+        self.lift()
+        self.focus_force()
+
+    def _normalize_window_size(self, size):
+        parsed = _parse_window_size(size)
+        if not parsed:
+            return None
+        width, height = parsed
+        width = _clamp(width, self._window_min_w, self._window_max_w)
+        height = _clamp(height, self._window_min_h, self._window_max_h)
+        return f"{width}x{height}"
+
+    def _current_window_size(self):
+        normalized = self._normalize_window_size(self.geometry().split("+", 1)[0])
+        return normalized or self._default_geometry
 
     def _nav_button(self, text, command):
         btn = ctk.CTkButton(
@@ -1144,7 +1345,7 @@ class BindXApp(ctk.CTk):
         self.after(20, self._poll_hotkeys)
 
     def _refresh_status_loop(self):
-        self.overview_tab.refresh()
+        self.overview_tab.refresh_status()
         hook_state = "运行中" if self.controller.trigger_engine.running else "未运行"
         self.sidebar_status.configure(
             text=f"Hook: {hook_state}\n热键: {'开' if self.controller.hk_running else '关'}\n鼠标: {'开' if self.controller.mc_running else '关'}"
@@ -1152,7 +1353,7 @@ class BindXApp(ctk.CTk):
         self.after(500, self._refresh_status_loop)
 
     def _show_tray_menu(self):
-        menu_font = ("Microsoft YaHei UI", scaled(self, 14))
+        menu_font = ("Microsoft YaHei UI", scaled(self, FONT_PRESET_TRAY_SIZE.get(self._get_font_preset(), FONT_PRESET_TRAY_SIZE["常规"])))
         menu = tk.Menu(self, tearoff=0, font=menu_font)
         menu.configure(font=menu_font)
         hook_state = "运行中" if self.controller.trigger_engine.running else "未运行"
@@ -1176,6 +1377,7 @@ class BindXApp(ctk.CTk):
         menu.add_separator()
         menu.add_command(label="全部启动", command=self._tray_start_all)
         menu.add_command(label="全部停止", command=self._tray_stop_all)
+        menu.add_command(label="重置窗口大小", command=self._reset_window_layout)
         menu.add_command(label="重新安装 Hook", command=self._tray_reinstall_hooks)
         menu.add_separator()
         menu.add_command(label="退出", command=self._quit_app)
@@ -1208,6 +1410,13 @@ class BindXApp(ctk.CTk):
 
     def _show_window(self):
         self.deiconify()
+        if self.controller.app_state.get("window_zoomed"):
+            try:
+                self.state("zoomed")
+            except tk.TclError:
+                pass
+        self.overview_tab.refresh_shortcut_buttons()
+        self.overview_tab.refresh_status()
         self.lift()
         self.focus_force()
 
@@ -1218,9 +1427,20 @@ class BindXApp(ctk.CTk):
             self.withdraw()
 
     def _on_close(self):
+        self._persist_window_state()
         self.withdraw()
 
     def _quit_app(self):
+        self._persist_window_state()
         self.controller.quit()
         self.tray.destroy()
         self.after(100, self.destroy)
+
+    def _get_font_preset(self):
+        return self.controller.app_state.get("font_preset", "常规")
+
+    def _change_font_preset(self, value):
+        if value not in FONT_PRESET_TABLE_SIZE:
+            return
+        self.controller.save_font_preset(value)
+        self._apply_adaptive_table_style()

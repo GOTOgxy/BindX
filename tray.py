@@ -13,6 +13,7 @@ argtypes 互覆盖。
 """
 
 import ctypes
+import queue
 from ctypes import wintypes
 
 import config_proxy
@@ -36,6 +37,7 @@ TRAY_CALLBACK_MSG = 0x0400
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONUP = 0x0205
+WM_NULL = 0x0000
 
 TRAY_CLASS_NAME = "BindXTray"
 TRAY_TIP = "BindX"
@@ -47,7 +49,7 @@ class TrayIcon:
         self.on_menu = on_menu
         self.tray_hwnd = None
         self.tray_icon_id = TRAY_ICON_ID
-        self._tray_event = 0
+        self._tray_queue = queue.Queue()
         self._tray_wndproc_ref = None
         self._create()
 
@@ -56,18 +58,23 @@ class TrayIcon:
         hdc_screen = user32.GetDC(None)
         hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
         hbm = gdi32.CreateCompatibleBitmap(hdc_screen, SIZE, SIZE)
-        gdi32.SelectObject(hdc_mem, hbm)
+        old_bm = gdi32.SelectObject(hdc_mem, hbm)
 
-        hbr_bg = gdi32.CreateSolidBrush(0x00663399)
+        hbr_bg = gdi32.CreateSolidBrush(0x001F2937)
         rect = wintypes.RECT(0, 0, SIZE, SIZE)
         user32.FillRect(hdc_mem, ctypes.byref(rect), hbr_bg)
         gdi32.DeleteObject(hbr_bg)
 
+        hbr_accent = gdi32.CreateSolidBrush(0x00EAB308)
+        accent = wintypes.RECT(0, 0, 4, SIZE)
+        user32.FillRect(hdc_mem, ctypes.byref(accent), hbr_accent)
+        gdi32.DeleteObject(hbr_accent)
+
         gdi32.SetBkMode(hdc_mem, 1)
-        hfont = gdi32.CreateFontW(12, 0, 0, 0, 700, 0, 0, 0, 0, 0, 0, 0, 0, "Consolas")
+        hfont = gdi32.CreateFontW(12, 0, 0, 0, 800, 0, 0, 0, 0, 0, 0, 0, 0, "Segoe UI")
         old_font = gdi32.SelectObject(hdc_mem, hfont)
         gdi32.SetTextColor(hdc_mem, 0x00FFFFFF)
-        gdi32.TextOutW(hdc_mem, 2, 1, "BX", 2)
+        gdi32.TextOutW(hdc_mem, 5, 1, "B", 1)
         gdi32.SelectObject(hdc_mem, old_font)
         gdi32.DeleteObject(hfont)
 
@@ -96,6 +103,7 @@ class TrayIcon:
         icon_info.hbmColor = hbm
         h_icon = user32.CreateIconIndirect(ctypes.byref(icon_info))
 
+        gdi32.SelectObject(hdc_mem, old_bm)
         gdi32.DeleteObject(mask_bm)
         gdi32.DeleteObject(hbm)
         gdi32.DeleteDC(hdc_mask)
@@ -133,19 +141,21 @@ class TrayIcon:
 
     def _wndproc_impl(self, hwnd, msg, wparam, lparam):
         if msg == TRAY_CALLBACK_MSG:
-            self._tray_event = lparam
+            self._tray_queue.put(lparam)
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def poll(self):
-        if self._tray_event:
-            ev = self._tray_event
-            self._tray_event = 0
-            if ev == WM_RBUTTONUP:
-                if self.on_menu:
-                    self.on_menu()
-            elif ev == WM_LBUTTONUP or ev == WM_LBUTTONDBLCLK:
-                if self.on_show:
-                    self.on_show()
+        try:
+            while True:
+                ev = self._tray_queue.get_nowait()
+                if ev == WM_RBUTTONUP:
+                    if self.on_menu:
+                        self.on_menu()
+                elif ev == WM_LBUTTONUP or ev == WM_LBUTTONDBLCLK:
+                    if self.on_show:
+                        self.on_show()
+        except queue.Empty:
+            pass
 
     def show_menu_at_cursor(self, menu):
         pt = wintypes.POINT()
@@ -154,6 +164,8 @@ class TrayIcon:
             user32.SetForegroundWindow(self.tray_hwnd)
         menu.tk_popup(pt.x, pt.y)
         menu.grab_release()
+        if self.tray_hwnd:
+            user32.PostMessageW(self.tray_hwnd, WM_NULL, 0, 0)
 
     def destroy(self):
         if self.tray_hwnd:

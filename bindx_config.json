@@ -1,4 +1,8 @@
 {
   "hotkey_running": true,
-  "mouse_running": true
+  "mouse_running": true,
+  "window_size": "946x582",
+  "window_zoomed": false,
+  "font_preset": "常规",
+  "autostart_enabled": true
 }

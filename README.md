@@ -1,137 +1,204 @@
 # BindX
 
-Hot Key（全局热键管理）与 Mouse（按键重映射）的统一编排器。
+BindX 是一个把 Hot Key（全局热键管理）和 Mouse（按键映射）统一到单进程、单托盘、单 UI 里的桌面工具。
 
-单进程、单托盘、单 UI，同时驱动两个子项目的核心引擎，子项目源码**零修改**。
-独立运行子项目仍完全可用（各自 `.bat` / `app.py` 不受影响）。
+当前项目保留两个子项目的独立运行能力，但日常主入口已经收敛为 BindX。
 
 ## 项目结构
 
-```
+```text
 BindX/
-├── app_hotkey_manager/  子项目（自带 .git，独立可用）
-├── mouse_click/          子项目（自带 .git，独立可用）
-├── app.py                BindX 入口（单实例 mutex → init → BindXApp mainloop）
-├── gui.py                统一 UI（customtkinter 左侧导航 + 托盘）
-├── controller.py         双引擎生命周期封装
-├── tray.py               BindX 系统托盘（纯 ctypes，手绘图标）
-├── config_proxy.py       子项目模块加载器（importlib，解决 gui.py 名冲突）
-├── BindX.bat             启动器
-├── install_startup.bat   安装开机自启
-├── uninstall_startup.bat 移除开机自启
-├── pin_to_start.bat      创建开始菜单快捷方式
-├── requirements.txt      keyboard, pynput, customtkinter
+├── app_hotkey_manager/   Hot Key 子项目（保留独立运行能力）
+├── mouse_click/          Mouse 子项目（保留独立运行能力）
+├── app.py                BindX 主入口
+├── gui.py                主界面（customtkinter）
+├── controller.py         引擎生命周期与 UI 状态管理
+├── tray.py               BindX 托盘实现
+├── trigger_engine.py     统一低层 Keyboard / Mouse Hook
+├── config_proxy.py       子项目模块加载代理
+├── shortcut_manager.py   桌面 / 开始菜单快捷方式创建
+├── startup_manager.py    开机启动管理（HKCU\Run）
+├── assets/               图标等资源
+├── BindX.bat             唯一手动启动入口
+├── requirements.txt
 └── README.md
 ```
 
 ## 运行要求
 
 - Windows 10 / 11
-- Python 3.10+（项目使用 PEP 604 `X | Y` 语法）
-- `pip install -r requirements.txt`（keyboard, pynput, customtkinter）
-
-## 快速启动
+- Python 3.10+
+- 依赖：
 
 ```bat
 pip install -r requirements.txt
+```
+
+## 启动方式
+
+### 推荐方式
+
+双击：
+
+```bat
 BindX.bat
 ```
 
-或直接：
+这是 BindX 的唯一手动启动入口。
+
+### 命令行方式
+
+也可以直接运行：
 
 ```bat
 python app.py
 ```
 
-## 架构
+或：
 
-BindX 通过 `importlib.util.spec_from_file_location` 将子项目源码按受控名字加载进同一进程：
+```bat
+pythonw app.py
+```
 
-| 子项目文件             | sys.modules 名     | 用途                               |
-|------------------------|---------------------|------------------------------------|
-| mouse_click/engine.py  | `engine`            | RemapperEngine 引擎 + 配置读写     |
-| mouse_click/gui.py     | `bindx_mc_gui`      | AddMappingDialog 等对话框类        |
-| app_hotkey_manager/hotkey_manager.py | `hotkey_manager` | HotkeyManager 引擎 + DLL argtypes  |
-| app_hotkey_manager/gui.py         | `bindx_hk_gui`      | EntryDialog 等对话框类             |
-| trigger_engine.py      | `trigger_engine`    | BindX 统一低层 Keyboard / Mouse Hook |
+## UI 功能
 
-两个 `gui.py` 用别名避免模块名冲突；引擎用自然名以便各自 gui 的 `from engine import ...` /
-`from hotkey_manager import ...` 能找到依赖。
+BindX 使用左侧导航，包含三个页面：
 
-### 加载顺序
+1. 总览
+2. 热键
+3. 鼠标映射
 
-mouse_click → app_hotkey_manager（mouse_click/gui.py 顶层设置部分 user32 argtypes，app_hotkey_manager/hotkey_manager.py
-随后覆盖为完整签名——HotkeyManager 依赖这些签名；BindX 仅复用 mouse_click 的对话框类，
-不使用其 ctypes 托盘代码，故覆盖无副作用）。
+### 总览页
 
-### 线程模型
+总览页提供：
 
-- **主线程**：tkinter mainloop + BindX 托盘 WndProc + 状态刷新 + 热键动作执行
-- **Trigger daemon**：统一 `WH_KEYBOARD_LL` / `WH_MOUSE_LL` 低层 hook（来自 trigger_engine）
-- **Watchdog daemon**：检测 hook 线程退出或心跳停滞并自动重装
+- Hot Key / Mouse 引擎状态
+- 全部启动
+- 全部停止
+- 重置窗口
+- 退出 BindX
+- 字体大小档位切换
+- 开机启动开关（登录后后台运行）
+- 创建桌面图标
+- 创建开始菜单图标
 
-### 配置
+### 热键页
 
-- Hot Key 条目 → `app_hotkey_manager/app_hotkey_config.json`（子项目原路径，`Path(__file__).parent` 定位）
-- Mouse 映射   → `mouse_click/config.json`（同上）
-- BindX 引擎状态 → `bindx_config.json`（记录 Hot Key / Mouse 下次启动时是否自动运行）
+支持：
 
-BindX UI 编辑直接写回各自 JSON，子项目独立运行时共享同一份配置。
+- 查看热键条目
+- 新增 / 编辑 / 删除条目
+- 双击切换启用状态
+- 双击切换“启动未运行”
+- 右键菜单操作
 
-## UI 说明
+### 鼠标映射页
 
-customtkinter 左侧导航：
+支持：
 
-1. **总览**：Hot Key / Mouse 引擎运行状态 + 启停按钮 + 全局动作（全部启动 / 全部停止 / 退出）
-2. **Hot Key**：条目列表（应用 / 快捷键 / 启用 / 启动未运行 / 安装路径），增删改查 + 录制
-   - 双击"启用"列切换条目启用/禁用
-   - 双击"启动未运行"列切换 launch_if_not_running
-   - 双击其他列打开编辑对话框
-   - 右键菜单：编辑 / 启用-禁用 / 删除
-3. **Mouse**：映射列表（启用 / 类型 / 触发 / 输出 / 描述），增删改查 + 录制
-   - 双击"启用"列切换映射启用/禁用
-   - 右键菜单：编辑 / 启用-禁用 / 删除
+- 查看映射条目
+- 新增 / 编辑 / 删除映射
+- 双击切换启用状态
+- 右键菜单操作
 
-### 系统托盘
+## 托盘行为
 
-紫色 "BX" 图标（手绘 16×16）：
-- 左键 / 双击 → 显示主窗口
-- 右键 → 菜单（显示主窗口 / 启停 Hot Key / 启停 Mouse / 退出）
+BindX 使用单托盘图标。
 
-关闭主窗口 → 最小化到托盘（不退出）；退出仅通过托盘菜单"退出"或总览页"退出 BindX"按钮。
+- 左键 / 双击：显示主窗口
+- 右键：打开托盘菜单
 
-### 自热键
+关闭主窗口不会退出程序，而是最小化到托盘。
 
-CTRL+ALT+H 由 HotKeyManager 自动注入，回调指向 BindX 主窗口的显隐切换。
-可在 Hot Key 页编辑/禁用该条目。
+退出程序请使用：
 
-## 批处理文件
+- 托盘菜单“退出”
+- 或总览页“退出 BindX”
 
-| 文件                  | 作用                                           |
-|-----------------------|------------------------------------------------|
-| `BindX.bat`           | `cd /d %~dp0` + `start "" pythonw app.py`     |
-| `install_startup.bat` | 创建指向项目 `BindX.bat` 的 Startup 快捷方式  |
-| `uninstall_startup.bat`| 删除 Startup 快捷方式并清理旧 bat 启动项      |
-| `pin_to_start.bat`    | VBS 创建 `%APPDATA%\...\Programs\BindX.lnk`   |
+## 开机启动
 
-`install_startup.bat` 只安装 BindX 自身启动项；开机后 BindX 启动并在进程内拉起两个引擎，
-不需要分别安装子项目的自启。
+开机启动已经集成到 UI 中，不再依赖单独批处理脚本。
 
-## ⚠ 重要提示
+实现方式：
 
-- **不要同时运行 BindX 和子项目独立版**。BindX 已在进程内注册所有热键 + 鼠标钩子，
-  若同时运行 `app_hotkey_manager\app_hotkey_manager.bat` 或 `mouse_click\mouse_remapper.bat`，
-  会导致热键重复注册 / 钩子重复挂载。
-- 如需单独使用某个子项目，请先退出 BindX。
+- 注册表位置：
+
+```text
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+```
+
+行为：
+
+- 打开开关后：登录 Windows 自动后台启动到托盘
+- 关闭开关后：移除启动项
+
+## 快捷方式与图标
+
+快捷方式能力已经集成到 UI 中：
+
+- 创建桌面图标
+- 创建开始菜单图标
+
+两者都会使用 `assets/` 中的图标资源。
+
+说明：
+
+- “创建开始菜单图标”是创建开始菜单入口
+- 如果要固定到开始菜单/开始栏，请在系统开始菜单中手动固定
+
+## 配置文件
+
+BindX 会使用以下配置：
+
+- Hot Key 配置：
+  - `app_hotkey_manager/app_hotkey_config.json`
+- Mouse 配置：
+  - `mouse_click/config.json`
+- BindX 自身状态：
+  - `bindx_config.json`
+
+`bindx_config.json` 当前用于保存：
+
+- 热键引擎是否运行
+- 鼠标引擎是否运行
+- 窗口大小 / 最大化状态
+- 字体大小档位
+- 开机启动状态
+
+## 重要提示
+
+- 不要同时运行 BindX 和两个子项目的独立版本
+- 否则可能出现：
+  - 热键重复注册
+  - Hook 重复挂载
+  - 行为冲突
+
+如果要单独运行子项目，请先退出 BindX。
 
 ## 子项目独立运行
 
+### Hot Key
+
 ```bat
 cd app_hotkey_manager
-pip install -r requirements.txt    # 空（零依赖）
-app_hotkey_manager.bat             # 或 python app.py
+app_hotkey_manager.bat
+```
 
+或：
+
+```bat
+python app.py
+```
+
+### Mouse
+
+```bat
 cd mouse_click
-pip install -r requirements.txt    # keyboard, pynput
-mouse_remapper.bat                 # 或 python app.py
+mouse_remapper.bat
+```
+
+或：
+
+```bat
+python app.py
 ```
