@@ -1,20 +1,9 @@
 # -*- coding: utf-8 -*-
 
-"""BindX 双引擎控制器。
+"""BindX trigger controller。
 
-封装 app_hotkey_manager 的 HotkeyManager 与 mouse_click 的 RemapperEngine 生命周期，
-让 gui.py 不必直接接触子项目内部 API。
-
-关键约束（来自子项目源码）：
-  - HotkeyManager.start_polling_thread() 内部才初始化 _pending_registers /
-    _pending_unregisters（hotkey_manager.py:829-830）；在此之前的 _register_one /
-    _unregister_one 会 AttributeError。因此控制器在 init 时先 start_polling_thread，
-    其后所有 CRUD 才安全。
-  - start_polling_thread 启动轮询线程时会自动 RegisterHotKey 所有 enabled 条目
-    （hotkey_manager.py:854-856），等价于"启动即注册"。所以 hk_running 初值跟随
-    该事实设为 True。
-  - RemapperEngine.start() 是重入 no-op；stop() 会唤醒消息循环并等待线程退出，
-    所以重启可直接 stop()->start()。
+HotKeyManager 仍负责热键配置 CRUD 和 AppController 动作；TriggerEngine 负责统一
+WH_KEYBOARD_LL / WH_MOUSE_LL 低层 hook、触发匹配与 hook 自恢复。
 """
 
 import json
@@ -22,6 +11,7 @@ import os
 from pathlib import Path
 
 import config_proxy
+from trigger_engine import TriggerEngine
 
 APP_STATE_FILE = Path(__file__).resolve().with_name("bindx_config.json")
 DEFAULT_APP_STATE = {"hotkey_running": True, "mouse_running": True}
@@ -52,29 +42,43 @@ class BindXController:
 
         self._HotkeyManager = hk.HotkeyManager
         self._load_hotkey_config = hk.load_config
-        self._RemapperEngine = mc.RemapperEngine
         self._load_mouse_config = mc.load_config
         self._save_mouse_config = mc.save_config
         self.app_state = load_app_state()
 
         self.hk_config = self._load_hotkey_config()
         self.hotkey_manager = self._HotkeyManager(self.hk_config)
+        self.hotkey_manager.external_trigger_mode = True
 
         self.hk_running = bool(self.app_state.get("hotkey_running", True))
-        self.hotkey_manager.start_polling_thread(register_enabled=self.hk_running)
-
+        self.hotkey_manager.external_trigger_active = self.hk_running
         self.mc_config = self._load_mouse_config()
-        self.mouse_engine = self._RemapperEngine()
-        self.mc_running = False
-        if self.app_state.get("mouse_running", True):
-            self.start_mouse(persist=False)
+        self.mc_running = bool(self.app_state.get("mouse_running", True))
+
+        self.trigger_engine = TriggerEngine(self.hotkey_manager, self.mc_config)
+        self.mouse_engine = self.trigger_engine
+        self.trigger_engine.set_enabled(
+            keyboard_enabled=self.hk_running,
+            mouse_enabled=self.mc_running,
+        )
 
     def set_hotkey_self_callback(self, callback):
         self.hotkey_manager.set_self_callback(callback)
 
     def process_hotkeys(self):
-        if self.hotkey_manager is not None:
-            self.hotkey_manager.process_hotkeys()
+        if self.trigger_engine is None:
+            return
+        for entry_id in self.trigger_engine.pop_hotkey_events():
+            entry = self.hotkey_manager.entry_map.get(entry_id)
+            if not entry or not entry.get("enabled", True):
+                continue
+            try:
+                if hasattr(entry["controller"], "callback"):
+                    entry["controller"].callback()
+                else:
+                    entry["controller"].toggle()
+            except Exception:
+                pass
 
     def _save_engine_state(self):
         save_app_state(self.app_state)
@@ -82,8 +86,9 @@ class BindXController:
     def start_hotkey(self, persist=True):
         if self.hotkey_manager is None:
             return
-        self.hotkey_manager.register_all()
         self.hk_running = True
+        self.hotkey_manager.external_trigger_active = True
+        self.trigger_engine.set_enabled(keyboard_enabled=True)
         self.app_state["hotkey_running"] = True
         if persist:
             self._save_engine_state()
@@ -91,8 +96,9 @@ class BindXController:
     def stop_hotkey(self, persist=True):
         if self.hotkey_manager is None:
             return
-        self.hotkey_manager.unregister_all()
         self.hk_running = False
+        self.hotkey_manager.external_trigger_active = False
+        self.trigger_engine.set_enabled(keyboard_enabled=False)
         self.app_state["hotkey_running"] = False
         if persist:
             self._save_engine_state()
@@ -101,45 +107,46 @@ class BindXController:
         self.hk_config = self._load_hotkey_config()
 
     def start_mouse(self, persist=True):
-        if self.mouse_engine is None:
+        if self.trigger_engine is None:
             return
         self.mc_config = self._load_mouse_config()
-        self.mouse_engine.start(self.mc_config)
-        self.mc_running = self.mouse_engine.running
+        self.trigger_engine.update_mouse_config(self.mc_config)
+        self.mc_running = True
+        self.trigger_engine.set_enabled(mouse_enabled=True)
         self.app_state["mouse_running"] = True
         if persist:
             self._save_engine_state()
 
     def stop_mouse(self, persist=True):
-        if self.mouse_engine is None:
+        if self.trigger_engine is None:
             return
-        self.mouse_engine.stop()
         self.mc_running = False
+        self.trigger_engine.set_enabled(mouse_enabled=False)
         self.app_state["mouse_running"] = False
         if persist:
             self._save_engine_state()
 
     def restart_mouse(self):
         was_running = bool(self.app_state.get("mouse_running", self.mc_running))
-        self.mouse_engine.stop()
+        self.mc_config = self._load_mouse_config()
+        self.trigger_engine.update_mouse_config(self.mc_config)
         if was_running:
-            self.mc_config = self._load_mouse_config()
-            self.mouse_engine.start(self.mc_config)
-            self.mc_running = self.mouse_engine.running
+            self.mc_running = True
+            self.trigger_engine.set_enabled(mouse_enabled=True)
         else:
-            self.mc_config = self._load_mouse_config()
+            self.mc_running = False
 
     def save_mouse_config(self, config):
         self.mc_config = config
         self._save_mouse_config(config)
+        self.trigger_engine.update_mouse_config(config)
+
+    def reinstall_hooks(self):
+        if self.trigger_engine is not None:
+            self.trigger_engine.reinstall_hooks()
 
     def quit(self):
         try:
-            self.hotkey_manager.unregister_all()
-            self.hotkey_manager.stop_polling_thread()
-        except Exception:
-            pass
-        try:
-            self.mouse_engine.stop()
+            self.trigger_engine.shutdown()
         except Exception:
             pass
