@@ -104,8 +104,26 @@ class OverviewTab(ttk.Frame):
         self.refresh()
 
     def refresh(self):
-        self.hk_status.config(text="运行中 ●" if self.controller.hk_running else "已停止 ○")
-        self.mc_status.config(text="运行中 ●" if self.controller.mc_running else "已停止 ○")
+        if self.controller.hk_running:
+            enabled_entries = [e for e in self.controller.hotkey_manager.entries if e.get("enabled", True)]
+            registered = sum(1 for e in enabled_entries if e.get("registered"))
+            failed = sum(1 for e in enabled_entries if e.get("last_error"))
+            suffix = f"（{registered}/{len(enabled_entries)} 已注册"
+            if failed:
+                suffix += f"，{failed} 失败"
+            suffix += "）"
+            self.hk_status.config(text=f"运行中 ● {suffix}")
+        else:
+            self.hk_status.config(text="已停止 ○")
+
+        actual_mouse_running = bool(self.controller.mouse_engine and self.controller.mouse_engine.running)
+        self.controller.mc_running = actual_mouse_running
+        if actual_mouse_running:
+            self.mc_status.config(text="运行中 ●")
+        elif self.controller.mouse_engine.last_error:
+            self.mc_status.config(text=f"启动失败 ○ {self.controller.mouse_engine.last_error}")
+        else:
+            self.mc_status.config(text="已停止 ○")
 
 
 class HotKeyTab(ttk.Frame):
@@ -115,6 +133,7 @@ class HotKeyTab(ttk.Frame):
         self.manager = controller.hotkey_manager
         self._create_ui()
         self._refresh_list()
+        self.after(100, self._refresh_list)
 
     def _create_ui(self):
         toolbar = ttk.Frame(self, padding=5)
@@ -123,22 +142,25 @@ class HotKeyTab(ttk.Frame):
         ttk.Button(toolbar, text="添加", command=self._add_entry, width=8).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="删除", command=self._delete_entry, width=8).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="编辑", command=self._edit_entry, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="刷新", command=self._refresh_list, width=8).pack(side=tk.LEFT, padx=2)
 
         list_frame = ttk.Frame(self, padding=5)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ("app", "hotkey", "enabled", "launch", "path")
+        columns = ("app", "hotkey", "enabled", "registered", "launch", "path")
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
         self.tree.heading("app", text="应用")
         self.tree.heading("hotkey", text="快捷键")
         self.tree.heading("enabled", text="启用")
+        self.tree.heading("registered", text="注册")
         self.tree.heading("launch", text="启动未运行")
         self.tree.heading("path", text="安装路径")
         self.tree.column("app", width=120, minwidth=80)
         self.tree.column("hotkey", width=120, minwidth=100)
         self.tree.column("enabled", width=60, minwidth=50, anchor=tk.CENTER)
+        self.tree.column("registered", width=90, minwidth=70, anchor=tk.CENTER)
         self.tree.column("launch", width=100, minwidth=80, anchor=tk.CENTER)
-        self.tree.column("path", width=240, minwidth=100)
+        self.tree.column("path", width=210, minwidth=100)
 
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -180,10 +202,19 @@ class HotKeyTab(ttk.Frame):
                 app_name = EntryDialog.APP_NAMES.get(app_id, app_id)
             hotkey = entry["hotkey"]
             enabled = "✓" if entry.get("enabled", True) else "✗"
+            if not entry.get("enabled", True):
+                registered = "未启用"
+            elif not self.controller.hk_running:
+                registered = "引擎停止"
+            elif entry.get("registered"):
+                registered = "已注册"
+            else:
+                err = entry.get("last_error")
+                registered = f"失败 {err}" if err else "待注册"
             launch = "✓" if entry["config_entry"].get("launch_if_not_running", False) else "✗"
             path = entry["config_entry"].get("install_path", "")
             self.tree.insert("", tk.END, iid=str(entry["id"]),
-                             values=(app_name, hotkey, enabled, launch, path))
+                             values=(app_name, hotkey, enabled, registered, launch, path))
         count = len(self.manager.entries)
         self.status_label.config(text=f"共 {count} 个条目")
 
@@ -210,6 +241,7 @@ class HotKeyTab(ttk.Frame):
                 return
             if entry:
                 self._refresh_list()
+                self.after(100, self._refresh_list)
 
     def _edit_entry(self):
         entry_id = self._get_selected_id()
@@ -234,6 +266,7 @@ class HotKeyTab(ttk.Frame):
                 messagebox.showerror("错误", str(e), parent=self)
                 return
             self._refresh_list()
+            self.after(100, self._refresh_list)
 
     def _delete_entry(self):
         entry_id = self._get_selected_id()
@@ -251,6 +284,7 @@ class HotKeyTab(ttk.Frame):
             return
         self.manager.toggle_entry(entry_id)
         self._refresh_list()
+        self.after(100, self._refresh_list)
 
     def _on_double_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
@@ -266,7 +300,8 @@ class HotKeyTab(ttk.Frame):
         if column == "#3":
             self.manager.toggle_entry(entry_id)
             self._refresh_list()
-        elif column == "#4":
+            self.after(100, self._refresh_list)
+        elif column == "#5":
             old_val = entry["config_entry"].get("launch_if_not_running", False)
             entry["config_entry"]["launch_if_not_running"] = not old_val
             self.manager._save_config()
@@ -358,17 +393,24 @@ class MouseTab(ttk.Frame):
         dlg = AddMappingDialog(self, "keyboard")
         self.wait_window(dlg)
         if dlg.result:
+            mapping = self._mapping_from_dialog(dlg, dlg.result.get("enabled", True))
             if dlg.mapping_type == "mouse":
-                mapping = {
-                    "button": dlg.result["button"],
-                    "output": dlg.result["output"],
-                    "description": dlg.result.get("description", ""),
-                    "enabled": dlg.result.get("enabled", True),
-                }
                 self.config.setdefault("mouse_mappings", []).append(mapping)
             else:
-                self.config.setdefault("mappings", []).append(dlg.result)
+                self.config.setdefault("mappings", []).append(mapping)
             self._save_and_restart()
+
+    def _mapping_from_dialog(self, dlg, enabled):
+        if dlg.mapping_type == "mouse":
+            return {
+                "button": dlg.result["button"],
+                "output": dlg.result["output"],
+                "description": dlg.result.get("description", ""),
+                "enabled": enabled,
+            }
+        mapping = dict(dlg.result)
+        mapping["enabled"] = enabled
+        return mapping
 
     def _on_double_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
@@ -426,15 +468,22 @@ class MouseTab(ttk.Frame):
             dlg.desc_var.set(old.get("description", ""))
         self.wait_window(dlg)
         if dlg.result:
+            old_enabled = old.get("enabled", True)
+            new_mapping = self._mapping_from_dialog(dlg, old_enabled)
+            keyboard_mappings = self.config.setdefault("mappings", [])
+            mouse_mappings = self.config.setdefault("mouse_mappings", [])
             if dlg.mapping_type == "mouse":
-                self.config["mouse_mappings"][idx] = {
-                    "button": dlg.result["button"],
-                    "output": dlg.result["output"],
-                    "description": dlg.result.get("description", ""),
-                    "enabled": dlg.result.get("enabled", True),
-                }
+                if is_keyboard:
+                    del keyboard_mappings[idx]
+                    mouse_mappings.append(new_mapping)
+                else:
+                    mouse_mappings[idx] = new_mapping
             else:
-                self.config["mappings"][idx] = dlg.result
+                if is_keyboard:
+                    keyboard_mappings[idx] = new_mapping
+                else:
+                    del mouse_mappings[idx]
+                    keyboard_mappings.append(new_mapping)
             self._save_and_restart()
 
     def _delete_entry(self):
