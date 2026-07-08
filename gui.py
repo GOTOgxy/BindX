@@ -4,8 +4,8 @@
 
 单进程、单托盘、单 mainloop，内含三页 customtkinter 视图：
   - 总览：双引擎运行状态 + 启停按钮 + 全局动作
-  - Hot Key：复刻 app_hotkey_manager/gui.py 的条目管理 Treeview，复用 EntryDialog
-  - Mouse：复刻 mouse_click/gui.py 的映射管理 Treeview，复用 AddMappingDialog
+  - Hot Key：复刻 app_hotkey_manager/gui.py 的条目管理 Treeview
+  - Mouse：复刻 mouse_click/gui.py 的映射管理 Treeview
 
 对话框类经 config_proxy 从子项目模块（bindx_hk_gui / bindx_mc_gui）取得，
 子项目源码零修改。
@@ -18,7 +18,7 @@ import time
 import tkinter as tk
 from pathlib import Path
 from ctypes import wintypes
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 import customtkinter as ctk
 
@@ -82,6 +82,14 @@ FONT_PRESET_TRAY_SIZE = {
     "超大": 30,
 }
 
+FONT_PRESET_DIALOG_SIZE = {
+    "紧凑": 15,
+    "稍小": 17,
+    "常规": 19,
+    "特大": 22,
+    "超大": 25,
+}
+
 
 def _parse_window_size(value):
     if not isinstance(value, str) or "x" not in value:
@@ -95,6 +103,571 @@ def _parse_window_size(value):
     if width <= 0 or height <= 0:
         return None
     return width, height
+
+
+def _dialog_font(widget, delta=0, weight=None):
+    root = getattr(widget, "_bindx_root", None) or widget.winfo_toplevel()
+    if hasattr(root, "_get_font_preset"):
+        preset = root._get_font_preset()
+    else:
+        preset = getattr(widget, "_dialog_font_preset", "常规")
+    size = FONT_PRESET_DIALOG_SIZE.get(preset, FONT_PRESET_DIALOG_SIZE["常规"]) + delta
+    return ctk.CTkFont(family="Microsoft YaHei UI", size=scaled(widget, size), weight=weight)
+
+
+def _readonly_entry(parent, variable, width=None):
+    kwargs = {"textvariable": variable, "font": _dialog_font(parent)}
+    if width is not None:
+        kwargs["width"] = width
+    entry = ctk.CTkEntry(parent, **kwargs)
+    entry.bind("<Key>", lambda _event: "break")
+    return entry
+
+
+class _BindXDialog(ctk.CTkToplevel):
+    def __init__(self, parent, title, width, height):
+        super().__init__(parent)
+        self._bindx_root = parent.winfo_toplevel()
+        self.ui_scale = getattr(self._bindx_root, "ui_scale", 1.0)
+        self._dialog_font_preset = (
+            self._bindx_root._get_font_preset()
+            if hasattr(self._bindx_root, "_get_font_preset")
+            else "常规"
+        )
+        self.result = None
+
+        self.title(title)
+        self.geometry(f"{scaled(self, width)}x{scaled(self, height)}")
+        self.minsize(scaled(self, width), scaled(self, height))
+        self.resizable(False, False)
+        self.configure(fg_color=("#f4f4f5", "#18181b"))
+        self.transient(self._bindx_root)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        self.body = ctk.CTkFrame(self, fg_color="transparent")
+        self.body.pack(fill=tk.BOTH, expand=True, padx=scaled(self, 20), pady=scaled(self, 18))
+        self.after(50, self.focus_force)
+
+    def _center_on_parent(self):
+        self.update_idletasks()
+        parent = self._bindx_root
+        x = parent.winfo_x() + max(0, (parent.winfo_width() - self.winfo_width()) // 2)
+        y = parent.winfo_y() + max(0, (parent.winfo_height() - self.winfo_height()) // 2)
+        self.geometry(f"+{x}+{y}")
+
+    def _label(self, parent, text, width=118):
+        return ctk.CTkLabel(parent, text=text, width=scaled(self, width), anchor="w", font=_dialog_font(self))
+
+    def _row(self, parent=None, pady=(0, 10)):
+        row = ctk.CTkFrame(parent or self.body, fg_color="transparent")
+        row.pack(fill=tk.X, pady=(scaled(self, pady[0]), scaled(self, pady[1])))
+        return row
+
+    def _button_row(self):
+        row = ctk.CTkFrame(self.body, fg_color="transparent")
+        row.pack(fill=tk.X, pady=(scaled(self, 12), 0))
+        return row
+
+    def _secondary_button(self, parent, text, command, width=84):
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            command=command,
+            width=scaled(self, width),
+            font=_dialog_font(self),
+            fg_color="#52525b",
+            hover_color="#3f3f46",
+        )
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
+
+
+class HotkeyCaptureDialog(_BindXDialog):
+    KEYSYM_MAP = {
+        "return": "ENTER",
+        "escape": "ESC",
+        "space": "SPACE",
+        "left": "LEFT",
+        "right": "RIGHT",
+        "up": "UP",
+        "down": "DOWN",
+        "home": "HOME",
+        "end": "END",
+        "prior": "PAGEUP",
+        "next": "PAGEDOWN",
+        "insert": "INSERT",
+        "delete": "DELETE",
+        "tab": "TAB",
+    }
+    MODIFIER_MAP = {
+        "control_l": "CTRL",
+        "control_r": "CTRL",
+        "alt_l": "ALT",
+        "alt_r": "ALT",
+        "shift_l": "SHIFT",
+        "shift_r": "SHIFT",
+        "super_l": "WIN",
+        "super_r": "WIN",
+        "meta_l": "WIN",
+        "meta_r": "WIN",
+    }
+    MODIFIER_ORDER = ("CTRL", "ALT", "SHIFT", "WIN")
+
+    def __init__(self, parent, current_hotkey=""):
+        super().__init__(parent, "录制快捷键", 560, 250)
+        self.captured_hotkey = current_hotkey
+        self.captured = False
+        self._pressed = set()
+
+        ctk.CTkLabel(self.body, text="请按下快捷键组合", font=_dialog_font(self, 2, "bold")).pack(anchor=tk.W, pady=(0, scaled(self, 10)))
+        self.hotkey_var = tk.StringVar(value=current_hotkey or "等待输入...")
+        ctk.CTkLabel(self.body, textvariable=self.hotkey_var, font=_dialog_font(self, 5, "bold")).pack(fill=tk.X, pady=(0, scaled(self, 18)))
+
+        btns = self._button_row()
+        ctk.CTkButton(btns, text="确认", command=self._on_ok, width=scaled(self, 88), font=_dialog_font(self)).pack(side=tk.RIGHT, padx=(scaled(self, 8), 0))
+        self.ok_btn = btns.winfo_children()[-1]
+        self.ok_btn.configure(state=tk.NORMAL if current_hotkey else tk.DISABLED)
+        self._secondary_button(btns, "取消", self._on_cancel).pack(side=tk.RIGHT, padx=(scaled(self, 8), 0))
+        self._secondary_button(btns, "清除", self._on_clear).pack(side=tk.RIGHT)
+
+        self.bind("<KeyPress>", self._on_key_press)
+        self.bind("<KeyRelease>", self._on_key_release)
+        self._center_on_parent()
+
+    def _normalize(self, keysym):
+        key = keysym.lower()
+        if key in self.MODIFIER_MAP:
+            return self.MODIFIER_MAP[key]
+        if len(key) == 1:
+            return key.upper()
+        if key.startswith("f") and key[1:].isdigit():
+            return key.upper()
+        return self.KEYSYM_MAP.get(key, key.upper())
+
+    def _on_key_release(self, event):
+        name = self._normalize(event.keysym)
+        if name in self.MODIFIER_ORDER:
+            self._pressed.discard(name)
+
+    def _on_key_press(self, event):
+        name = self._normalize(event.keysym)
+        if name in self.MODIFIER_ORDER:
+            self._pressed.add(name)
+            return
+        if name not in _hk_gui.VIRTUAL_KEYS:
+            self.hotkey_var.set(f"不支持：{name}")
+            self.ok_btn.configure(state=tk.DISABLED)
+            return
+        modifiers = [mod for mod in self.MODIFIER_ORDER if mod in self._pressed]
+        self.captured_hotkey = "+".join(modifiers + [name])
+        self.hotkey_var.set(self.captured_hotkey)
+        self.captured = True
+        self.ok_btn.configure(state=tk.NORMAL)
+
+    def _on_clear(self):
+        self.captured_hotkey = ""
+        self.captured = False
+        self._pressed.clear()
+        self.hotkey_var.set("等待输入...")
+        self.ok_btn.configure(state=tk.DISABLED)
+
+    def _on_ok(self):
+        if self.captured_hotkey:
+            self.result = self.captured_hotkey
+            self.destroy()
+
+
+class KeyCaptureDialog(_BindXDialog):
+    KEYSYM_MAP = {
+        "return": "enter",
+        "escape": "esc",
+        "space": "space",
+        "left": "left",
+        "right": "right",
+        "up": "up",
+        "down": "down",
+        "home": "home",
+        "end": "end",
+        "prior": "pageup",
+        "next": "pagedown",
+        "insert": "insert",
+        "delete": "delete",
+        "backspace": "backspace",
+        "caps_lock": "caps lock",
+        "tab": "tab",
+    }
+    MODIFIER_MAP = {
+        "control_l": "ctrl",
+        "control_r": "ctrl",
+        "alt_l": "alt",
+        "alt_r": "alt",
+        "shift_l": "shift",
+        "shift_r": "shift",
+        "super_l": "win",
+        "super_r": "win",
+        "meta_l": "win",
+        "meta_r": "win",
+    }
+    MODIFIER_ORDER = ("ctrl", "alt", "shift", "win")
+
+    def __init__(self, parent, title="录制按键"):
+        super().__init__(parent, title, 540, 230)
+        self._pressed = set()
+        self._captured = []
+
+        ctk.CTkLabel(self.body, text="请按下目标按键组合", font=_dialog_font(self, 2, "bold")).pack(anchor=tk.W, pady=(0, scaled(self, 10)))
+        self.key_var = tk.StringVar(value="等待输入...")
+        ctk.CTkLabel(self.body, textvariable=self.key_var, font=_dialog_font(self, 5, "bold")).pack(fill=tk.X, pady=(0, scaled(self, 18)))
+
+        btns = self._button_row()
+        ctk.CTkButton(btns, text="确认", command=self._on_ok, width=scaled(self, 88), font=_dialog_font(self)).pack(side=tk.RIGHT, padx=(scaled(self, 8), 0))
+        self.ok_btn = btns.winfo_children()[-1]
+        self.ok_btn.configure(state=tk.DISABLED)
+        self._secondary_button(btns, "取消", self._on_cancel).pack(side=tk.RIGHT, padx=(scaled(self, 8), 0))
+        self._secondary_button(btns, "清除", self._on_clear).pack(side=tk.RIGHT)
+
+        self.bind("<KeyPress>", self._on_key_press)
+        self.bind("<KeyRelease>", self._on_key_release)
+        self._center_on_parent()
+
+    def _normalize(self, keysym):
+        key = keysym.lower()
+        if key in self.MODIFIER_MAP:
+            return self.MODIFIER_MAP[key]
+        if len(key) == 1:
+            return key.lower()
+        if key.startswith("f") and key[1:].isdigit():
+            return key.lower()
+        return self.KEYSYM_MAP.get(key, key)
+
+    def _on_key_release(self, event):
+        name = self._normalize(event.keysym)
+        self._pressed.discard(name)
+
+    def _on_key_press(self, event):
+        name = self._normalize(event.keysym)
+        if name in self.MODIFIER_ORDER:
+            self._pressed.add(name)
+            return
+        modifiers = [mod for mod in self.MODIFIER_ORDER if mod in self._pressed]
+        self._captured = modifiers + [name]
+        self.key_var.set(" + ".join(self._captured))
+        self.ok_btn.configure(state=tk.NORMAL)
+
+    def _on_clear(self):
+        self._pressed.clear()
+        self._captured = []
+        self.key_var.set("等待输入...")
+        self.ok_btn.configure(state=tk.DISABLED)
+
+    def _on_ok(self):
+        if self._captured:
+            self.result = self._captured
+            self.destroy()
+
+
+class MouseCaptureDialog(_BindXDialog):
+    def __init__(self, parent, title="录制鼠标按键"):
+        super().__init__(parent, title, 540, 230)
+        self._listener = None
+
+        ctk.CTkLabel(self.body, text="请按下鼠标按键", font=_dialog_font(self, 2, "bold")).pack(anchor=tk.W, pady=(0, scaled(self, 10)))
+        self.key_var = tk.StringVar(value="等待输入...")
+        ctk.CTkLabel(self.body, textvariable=self.key_var, font=_dialog_font(self, 5, "bold")).pack(fill=tk.X, pady=(0, scaled(self, 18)))
+
+        btns = self._button_row()
+        ctk.CTkButton(btns, text="确认", command=self._on_ok, width=scaled(self, 88), font=_dialog_font(self)).pack(side=tk.RIGHT, padx=(scaled(self, 8), 0))
+        self.ok_btn = btns.winfo_children()[-1]
+        self.ok_btn.configure(state=tk.DISABLED)
+        self._secondary_button(btns, "取消", self._on_cancel).pack(side=tk.RIGHT)
+
+        self._start_listener()
+        self._center_on_parent()
+
+    def _start_listener(self):
+        try:
+            from pynput import mouse as pynput_mouse
+        except ImportError as exc:
+            self.key_var.set(f"鼠标监听不可用：{exc}")
+            return
+
+        def on_click(_x, _y, button, pressed):
+            if pressed:
+                self.after(0, lambda: self._on_detected(getattr(button, "name", str(button))))
+
+        self._listener = pynput_mouse.Listener(on_click=on_click)
+        self._listener.start()
+
+    def _on_detected(self, name):
+        self.key_var.set(name)
+        self.ok_btn.configure(state=tk.NORMAL)
+
+    def _on_ok(self):
+        val = self.key_var.get()
+        if val and val != "等待输入..." and not val.startswith("鼠标监听不可用"):
+            self.result = val
+        self._stop_listener()
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self._stop_listener()
+        self.destroy()
+
+    def _stop_listener(self):
+        if self._listener:
+            self._listener.stop()
+            self._listener = None
+
+
+class EntryDialog(_BindXDialog):
+    APP_IDS = ["cloudmusic", "zotero", "termius", "hot_key_manager", "generic", "web_app"]
+    APP_NAMES = {
+        "cloudmusic": "网易云音乐",
+        "zotero": "Zotero",
+        "termius": "Termius",
+        "hot_key_manager": "Hot Key Manager",
+        "generic": "通用应用",
+        "web_app": "网页应用",
+    }
+    BROWSER_MAP = {"Edge": "msedge.exe", "Chrome": "chrome.exe"}
+
+    def __init__(self, parent, entry=None):
+        super().__init__(parent, "编辑条目" if entry else "添加条目", 680, 560)
+        self.entry = entry
+
+        self.app_var = tk.StringVar(value=entry["config_entry"]["app"] if entry else self.APP_IDS[0])
+        self.hotkey_var = tk.StringVar(value=entry["hotkey"] if entry else "")
+        self.enabled_var = tk.BooleanVar(value=entry["enabled"] if entry else True)
+        default_launch = entry["config_entry"].get("launch_if_not_running", False) if entry else False
+        if entry is None and self.app_var.get() == "generic":
+            default_launch = True
+        self.launch_var = tk.BooleanVar(value=default_launch)
+        self.path_var = tk.StringVar(value=entry["config_entry"].get("install_path", "") if entry else "")
+        self.exe_var = tk.StringVar(value=entry["config_entry"].get("exe_name", "") if entry else "")
+        self.keyword_var = tk.StringVar(value=entry["config_entry"].get("title_keyword", "") if entry else "")
+        saved_exe = entry["config_entry"].get("exe_name", "") if entry else ""
+        self.browser_var = tk.StringVar(value="Chrome" if saved_exe == "chrome.exe" else "Edge")
+
+        row = self._row()
+        self._label(row, "应用：").pack(side=tk.LEFT)
+        self.app_combo = ctk.CTkOptionMenu(row, values=self.APP_IDS, variable=self.app_var, command=self._on_app_changed, width=scaled(self, 230), font=_dialog_font(self))
+        self.app_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        row = self._row()
+        self._label(row, "快捷键：").pack(side=tk.LEFT)
+        self.hotkey_entry = _readonly_entry(row, self.hotkey_var)
+        self.hotkey_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ctk.CTkButton(row, text="录制", command=self._capture_hotkey, width=scaled(self, 82), font=_dialog_font(self)).pack(side=tk.LEFT, padx=(scaled(self, 8), 0))
+
+        row = self._row()
+        self._label(row, "启用：").pack(side=tk.LEFT)
+        ctk.CTkCheckBox(row, text="", variable=self.enabled_var, width=scaled(self, 28), font=_dialog_font(self)).pack(side=tk.LEFT)
+
+        row = self._row()
+        self._label(row, "启动未运行：").pack(side=tk.LEFT)
+        ctk.CTkCheckBox(row, text="", variable=self.launch_var, width=scaled(self, 28), font=_dialog_font(self)).pack(side=tk.LEFT)
+
+        row = self._row()
+        self._label(row, "安装路径：").pack(side=tk.LEFT)
+        ctk.CTkEntry(row, textvariable=self.path_var, font=_dialog_font(self)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._secondary_button(row, "浏览", self._browse, width=82).pack(side=tk.LEFT, padx=(scaled(self, 8), 0))
+
+        self.row_exe = self._row()
+        self._label(self.row_exe, "exe 名称：").pack(side=tk.LEFT)
+        ctk.CTkEntry(self.row_exe, textvariable=self.exe_var, font=_dialog_font(self)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.row_keyword = self._row()
+        self._label(self.row_keyword, "标题关键词：").pack(side=tk.LEFT)
+        ctk.CTkEntry(self.row_keyword, textvariable=self.keyword_var, font=_dialog_font(self)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.row_browser = self._row()
+        self._label(self.row_browser, "浏览器：").pack(side=tk.LEFT)
+        ctk.CTkOptionMenu(self.row_browser, values=["Edge", "Chrome"], variable=self.browser_var, width=scaled(self, 180), font=_dialog_font(self)).pack(side=tk.LEFT)
+
+        btns = self._button_row()
+        ctk.CTkButton(btns, text="确认", command=self._on_ok, width=scaled(self, 92), font=_dialog_font(self)).pack(side=tk.RIGHT, padx=(scaled(self, 8), 0))
+        self._secondary_button(btns, "取消", self._on_cancel, width=92).pack(side=tk.RIGHT)
+
+        self._on_app_changed()
+        self._center_on_parent()
+
+    def _capture_hotkey(self):
+        dlg = HotkeyCaptureDialog(self, self.hotkey_var.get())
+        self.wait_window(dlg)
+        if getattr(dlg, "result", None):
+            self.hotkey_var.set(dlg.result)
+
+    def _browse(self):
+        path = filedialog.askopenfilename(
+            title="选择可执行文件",
+            filetypes=[("可执行文件", "*.exe"), ("所有文件", "*.*")],
+            parent=self,
+        )
+        if path:
+            self.path_var.set(path)
+
+    def _on_app_changed(self, _value=None):
+        app = self.app_var.get()
+        if app == "generic":
+            self.row_exe.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            self.row_keyword.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            self.row_browser.pack_forget()
+            if self.entry is None:
+                self.launch_var.set(True)
+        elif app == "web_app":
+            self.row_exe.pack_forget()
+            self.row_keyword.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            self.row_browser.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+        else:
+            self.row_exe.pack_forget()
+            self.row_keyword.pack_forget()
+            self.row_browser.pack_forget()
+            if self.entry is None:
+                self.launch_var.set(False)
+
+    def _on_ok(self):
+        hotkey = self.hotkey_var.get().strip()
+        if not hotkey:
+            messagebox.showwarning("提示", "请录制快捷键", parent=self)
+            return
+
+        app = self.app_var.get()
+        if app == "web_app":
+            keyword = self.keyword_var.get().strip()
+            if not keyword:
+                messagebox.showwarning("提示", "网页应用必须填写标题关键词", parent=self)
+                return
+            self.result = {
+                "app": "web_app",
+                "hotkey": hotkey,
+                "enabled": self.enabled_var.get(),
+                "launch_if_not_running": False,
+                "install_path": "",
+                "exe_name": self.BROWSER_MAP[self.browser_var.get()],
+                "title_keyword": keyword,
+            }
+            self.destroy()
+            return
+
+        self.result = {
+            "app": app,
+            "hotkey": hotkey,
+            "enabled": self.enabled_var.get(),
+            "launch_if_not_running": self.launch_var.get(),
+            "install_path": self.path_var.get().strip(),
+        }
+        if app == "generic":
+            exe_name = self.exe_var.get().strip()
+            install_path = self.path_var.get().strip()
+            if not exe_name and not install_path:
+                messagebox.showwarning("提示", "通用应用必须填写 exe 名称或安装路径", parent=self)
+                return
+            if exe_name:
+                self.result["exe_name"] = exe_name
+            self.result["title_keyword"] = self.keyword_var.get().strip()
+
+        self.destroy()
+
+
+class AddMappingDialog(_BindXDialog):
+    def __init__(self, parent, mapping_type="keyboard"):
+        super().__init__(parent, "映射设置", 660, 430)
+        self.mapping_type = mapping_type
+
+        self.type_var = tk.StringVar(value=mapping_type)
+        self.trigger_var = tk.StringVar(value="")
+        self.button_var = tk.StringVar(value="")
+        self.output_var = tk.StringVar(value="")
+        self.desc_var = tk.StringVar(value="")
+
+        row = self._row()
+        self._label(row, "类型：").pack(side=tk.LEFT)
+        self.type_combo = ctk.CTkOptionMenu(row, values=["keyboard", "mouse"], variable=self.type_var, command=self._on_type_changed, width=scaled(self, 180), font=_dialog_font(self))
+        self.type_combo.pack(side=tk.LEFT)
+
+        self.trigger_frame = self._row()
+        self._label(self.trigger_frame, "触发键：").pack(side=tk.LEFT)
+        _readonly_entry(self.trigger_frame, self.trigger_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ctk.CTkButton(self.trigger_frame, text="录制", command=self._capture_trigger, width=scaled(self, 82), font=_dialog_font(self)).pack(side=tk.LEFT, padx=(scaled(self, 8), 0))
+
+        self.mouse_frame = self._row()
+        self._label(self.mouse_frame, "鼠标按键：").pack(side=tk.LEFT)
+        self.button_combo = ctk.CTkOptionMenu(self.mouse_frame, values=["left", "right", "middle", "x1", "x2"], variable=self.button_var, width=scaled(self, 180), font=_dialog_font(self))
+        self.button_combo.pack(side=tk.LEFT)
+        ctk.CTkButton(self.mouse_frame, text="录制", command=self._capture_mouse, width=scaled(self, 82), font=_dialog_font(self)).pack(side=tk.LEFT, padx=(scaled(self, 8), 0))
+
+        row = self._row()
+        self._label(row, "输出键：").pack(side=tk.LEFT)
+        _readonly_entry(row, self.output_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ctk.CTkButton(row, text="录制", command=self._capture_output, width=scaled(self, 82), font=_dialog_font(self)).pack(side=tk.LEFT, padx=(scaled(self, 8), 0))
+
+        row = self._row()
+        self._label(row, "描述：").pack(side=tk.LEFT)
+        ctk.CTkEntry(row, textvariable=self.desc_var, font=_dialog_font(self)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        btns = self._button_row()
+        ctk.CTkButton(btns, text="确认", command=self._on_ok, width=scaled(self, 92), font=_dialog_font(self)).pack(side=tk.RIGHT, padx=(scaled(self, 8), 0))
+        self._secondary_button(btns, "取消", self._on_cancel, width=92).pack(side=tk.RIGHT)
+
+        self._on_type_changed()
+        self._center_on_parent()
+
+    def _on_type_changed(self, _value=None):
+        self.mapping_type = self.type_var.get()
+        if self.mapping_type == "keyboard":
+            self.trigger_frame.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            self.mouse_frame.pack_forget()
+        else:
+            self.trigger_frame.pack_forget()
+            self.mouse_frame.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            if not self.button_var.get():
+                self.button_var.set("x1")
+
+    def _capture_trigger(self):
+        dlg = KeyCaptureDialog(self, "录制触发键")
+        self.wait_window(dlg)
+        if getattr(dlg, "result", None):
+            self.trigger_var.set(" + ".join(dlg.result))
+
+    def _capture_output(self):
+        dlg = KeyCaptureDialog(self, "录制输出键")
+        self.wait_window(dlg)
+        if getattr(dlg, "result", None):
+            self.output_var.set(" + ".join(dlg.result))
+
+    def _capture_mouse(self):
+        dlg = MouseCaptureDialog(self, "录制鼠标按键")
+        self.wait_window(dlg)
+        if getattr(dlg, "result", None):
+            self.button_var.set(dlg.result)
+
+    def _on_ok(self):
+        trigger = self.trigger_var.get().strip()
+        output = self.output_var.get().strip()
+        if self.mapping_type == "mouse":
+            button = self.button_var.get().strip()
+            if not button or not output:
+                messagebox.showwarning("提示", "请录制按键", parent=self)
+                return
+        else:
+            if not trigger or not output:
+                messagebox.showwarning("提示", "请录制按键", parent=self)
+                return
+
+        self.result = {
+            "trigger": [k.strip() for k in trigger.split("+") if k.strip()],
+            "output": [k.strip() for k in output.split("+") if k.strip()],
+            "description": self.desc_var.get().strip() or f"{trigger if self.mapping_type == 'keyboard' else 'Mouse ' + self.button_var.get()} -> {output}",
+            "enabled": True,
+        }
+        if self.mapping_type == "mouse":
+            self.result["button"] = self.button_var.get()
+
+        self.destroy()
 
 
 class OverviewTab(ctk.CTkFrame):
