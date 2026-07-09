@@ -1,0 +1,56 @@
+{
+  "display_name": "App Hotkey Manager",
+  "mutex_name": "Global\\AppHotkeyManager",
+  "entries": [
+    {
+      "app": "cloudmusic",
+      "hotkey": "CTRL+ALT+Q",
+      "launch_if_not_running": false,
+      "install_path": "",
+      "enabled": true
+    },
+    {
+      "app": "zotero",
+      "hotkey": "CTRL+ALT+Z",
+      "launch_if_not_running": false,
+      "install_path": "C:\\Program Files\\Zotero\\zotero.exe",
+      "enabled": true
+    },
+    {
+      "app": "termius",
+      "hotkey": "CTRL+Q",
+      "launch_if_not_running": true,
+      "install_path": "",
+      "enabled": true
+    },
+    {
+      "app": "hot_key_manager",
+      "name": "Hot Key Manager",
+      "hotkey": "CTRL+ALT+H",
+      "enabled": true
+    },
+    {
+      "app": "generic",
+      "hotkey": "CTRL+ALT+K",
+      "launch_if_not_running": false,
+      "install_path": "C:/Program Files (x86)/Tencent/QQMusic/QQMusic.exe",
+      "enabled": false
+    },
+    {
+      "app": "web_app",
+      "hotkey": "ALT + CTRL + G",
+      "launch_if_not_running": false,
+      "install_path": "",
+      "enabled": false,
+      "exe_name": "msedge.exe",
+      "title_keyword": "Google Gemini"
+    },
+    {
+      "app": "generic",
+      "hotkey": "ALT+CTRL+A",
+      "launch_if_not_running": false,
+      "install_path": "C:/Users/gxy/AppData/Local/Programs/QianwenApp/qianwen.exe",
+      "enabled": true
+    }
+  ]
+}

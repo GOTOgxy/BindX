@@ -1,6 +1,0 @@
-[submodule "app_hotkey_manager"]
-	path = app_hotkey_manager
-	url = https://github.com/GOTOgxy/app_hotkey_manager.git
-[submodule "mouse_click"]
-	path = mouse_click
-	url = https://github.com/GOTOgxy/mouse_click.git
