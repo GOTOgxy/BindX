@@ -299,9 +299,11 @@ class TriggerEngine:
             if self.keyboard_enabled:
                 if self._match_hotkey(vk):
                     self._suppressed_keyups.add(vk)
+                    self._suppressed_keyups.update(self._pressed_vks & self.MODIFIER_KEYS)
                     return 1
                 if self._match_key_mapping(vk):
                     self._suppressed_keyups.add(vk)
+                    self._suppressed_keyups.update(self._pressed_vks & self.MODIFIER_KEYS)
                     return 1
         elif is_up:
             self._pressed_vks.discard(vk)

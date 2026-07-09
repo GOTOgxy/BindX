@@ -4,14 +4,12 @@
 
 单进程、单托盘、单 mainloop，内含三页 customtkinter 视图：
   - 总览：双引擎运行状态 + 启停按钮 + 全局动作
-  - Hot Key：复刻 app_hotkey_manager/gui.py 的条目管理 Treeview
-  - Mouse：复刻 mouse_click/gui.py 的映射管理 Treeview
-
-对话框类经 config_proxy 从子项目模块（bindx_hk_gui / bindx_mc_gui）取得，
-子项目源码零修改。
+  - Hot Key：热键条目管理
+  - Mouse：鼠标映射管理
 """
 
 import ctypes
+import os
 import queue
 import threading
 import time
@@ -26,12 +24,7 @@ import config_proxy
 import shortcut_manager
 from tray import TrayIcon
 
-_hk_gui = config_proxy.hk_gui_module()
-_mc_gui = config_proxy.mc_gui_module()
-
-EntryDialog = _hk_gui.EntryDialog
-HotkeyCaptureDialog = _hk_gui.HotkeyCaptureDialog
-AddMappingDialog = _mc_gui.AddMappingDialog
+_hk_logic = config_proxy.hk_module()
 
 
 ctk.set_appearance_mode("system")
@@ -64,6 +57,16 @@ def scaled(widget, value):
 
 def ui_font(widget, size, weight=None):
     return ctk.CTkFont(family="Microsoft YaHei UI", size=scaled(widget, size), weight=weight)
+
+
+def menu_font(widget):
+    root = widget.winfo_toplevel()
+    if hasattr(root, "_get_font_preset"):
+        preset = root._get_font_preset()
+    else:
+        preset = "常规"
+    size = FONT_PRESET_TRAY_SIZE.get(preset, FONT_PRESET_TRAY_SIZE["常规"])
+    return ("Microsoft YaHei UI", scaled(widget, size))
 
 
 FONT_PRESET_TABLE_SIZE = {
@@ -257,7 +260,7 @@ class HotkeyCaptureDialog(_BindXDialog):
         if name in self.MODIFIER_ORDER:
             self._pressed.add(name)
             return
-        if name not in _hk_gui.VIRTUAL_KEYS:
+        if name not in _hk_logic.VIRTUAL_KEYS:
             self.hotkey_var.set(f"不支持：{name}")
             self.ok_btn.configure(state=tk.DISABLED)
             return
@@ -424,14 +427,75 @@ class MouseCaptureDialog(_BindXDialog):
 
 
 class EntryDialog(_BindXDialog):
-    APP_IDS = ["cloudmusic", "zotero", "termius", "hot_key_manager", "generic", "web_app"]
+    BUILTIN_APP_IDS = ["cloudmusic", "zotero", "termius", "hot_key_manager"]
+    TARGET_TYPE_IDS = ["win32", "chromium", "browser_tab", "uwp", "builtin"]
+    TARGET_TYPE_NAMES = {
+        "win32": "Win32 窗口",
+        "chromium": "Chromium 应用",
+        "browser_tab": "浏览器 App",
+        "uwp": "UWP 应用",
+        "builtin": "内置适配",
+    }
+    TARGET_TYPE_NAME_TO_ID = {name: type_id for type_id, name in TARGET_TYPE_NAMES.items()}
     APP_NAMES = {
         "cloudmusic": "网易云音乐",
         "zotero": "Zotero",
         "termius": "Termius",
-        "hot_key_manager": "Hot Key Manager",
+        "hot_key_manager": "BindX",
         "generic": "通用应用",
-        "web_app": "网页应用",
+        "web_app": "浏览器 App",
+    }
+    APP_NAME_TO_ID = {name: app_id for app_id, name in APP_NAMES.items()}
+    BUILTIN_TARGET_TYPES = {
+        "cloudmusic": "win32",
+        "zotero": "win32",
+        "termius": "chromium",
+        "hot_key_manager": "win32",
+    }
+    BUILTIN_PRESETS = {
+        "cloudmusic": {
+            "tray_aware": True,
+            "multi_window": False,
+            "launch_if_not_running": False,
+            "exe_name": "cloudmusic.exe",
+            "title_keyword": "",
+            "path_candidates": [
+                "C:/Program Files/NetEase/CloudMusic/cloudmusic.exe",
+                "C:/Program Files (x86)/NetEase/CloudMusic/cloudmusic.exe",
+                "%LOCALAPPDATA%/Netease/CloudMusic/cloudmusic.exe",
+            ],
+        },
+        "zotero": {
+            "tray_aware": False,
+            "multi_window": False,
+            "launch_if_not_running": True,
+            "exe_name": "zotero.exe",
+            "title_keyword": "",
+            "path_candidates": [
+                "C:/Program Files/Zotero/zotero.exe",
+                "C:/Program Files (x86)/Zotero/zotero.exe",
+            ],
+        },
+        "termius": {
+            "tray_aware": False,
+            "multi_window": False,
+            "launch_if_not_running": True,
+            "exe_name": "Termius.exe",
+            "title_keyword": "",
+            "path_candidates": [
+                "%LOCALAPPDATA%/Programs/Termius/Termius.exe",
+                "C:/Program Files/Termius/Termius.exe",
+                "C:/Program Files (x86)/Termius/Termius.exe",
+            ],
+        },
+        "hot_key_manager": {
+            "tray_aware": True,
+            "multi_window": False,
+            "launch_if_not_running": False,
+            "exe_name": "",
+            "title_keyword": "",
+            "path_candidates": [],
+        },
     }
     BROWSER_MAP = {"Edge": "msedge.exe", "Chrome": "chrome.exe"}
 
@@ -439,23 +503,56 @@ class EntryDialog(_BindXDialog):
         super().__init__(parent, "编辑条目" if entry else "添加条目", 680, 560)
         self.entry = entry
 
-        self.app_var = tk.StringVar(value=entry["config_entry"]["app"] if entry else self.APP_IDS[0])
+        config_entry = entry["config_entry"] if entry else {}
+        initial_app = config_entry.get("app", "generic")
+        initial_target = self._target_type_for_entry(config_entry)
+        self.target_type_var = tk.StringVar(value=self.TARGET_TYPE_NAMES[initial_target])
+        builtin_app = initial_app if initial_app in self.BUILTIN_APP_IDS else self.BUILTIN_APP_IDS[0]
+        builtin_value = self.APP_NAMES[builtin_app]
+        self.builtin_var = tk.StringVar(value=builtin_value)
         self.hotkey_var = tk.StringVar(value=entry["hotkey"] if entry else "")
         self.enabled_var = tk.BooleanVar(value=entry["enabled"] if entry else True)
-        default_launch = entry["config_entry"].get("launch_if_not_running", False) if entry else False
-        if entry is None and self.app_var.get() == "generic":
+        self.tray_var = tk.BooleanVar(value=self._is_tray_aware(config_entry))
+        self.multi_window_var = tk.BooleanVar(value=self._is_multi_window(config_entry))
+        default_launch = config_entry.get("launch_if_not_running", False) if entry else False
+        if entry is None and initial_target != "browser_tab":
             default_launch = True
         self.launch_var = tk.BooleanVar(value=default_launch)
-        self.path_var = tk.StringVar(value=entry["config_entry"].get("install_path", "") if entry else "")
-        self.exe_var = tk.StringVar(value=entry["config_entry"].get("exe_name", "") if entry else "")
-        self.keyword_var = tk.StringVar(value=entry["config_entry"].get("title_keyword", "") if entry else "")
-        saved_exe = entry["config_entry"].get("exe_name", "") if entry else ""
+        self.path_var = tk.StringVar(value=self._display_path(config_entry.get("install_path", "")))
+        self.exe_var = tk.StringVar(value=config_entry.get("exe_name", ""))
+        self.name_var = tk.StringVar(value=config_entry.get("name", ""))
+        self.keyword_var = tk.StringVar(value=config_entry.get("title_keyword", ""))
+        self.path_var.trace_add("write", lambda *_args: self._refresh_exe_row())
+        saved_exe = config_entry.get("exe_name", "")
         self.browser_var = tk.StringVar(value="Chrome" if saved_exe == "chrome.exe" else "Edge")
 
         row = self._row()
-        self._label(row, "应用：").pack(side=tk.LEFT)
-        self.app_combo = ctk.CTkOptionMenu(row, values=self.APP_IDS, variable=self.app_var, command=self._on_app_changed, width=scaled(self, 230), font=_dialog_font(self))
-        self.app_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._label(row, "目标类型：").pack(side=tk.LEFT)
+        self.target_combo = ctk.CTkOptionMenu(
+            row,
+            values=[self.TARGET_TYPE_NAMES[type_id] for type_id in self.TARGET_TYPE_IDS],
+            variable=self.target_type_var,
+            command=self._on_app_changed,
+            width=scaled(self, 230),
+            font=_dialog_font(self),
+        )
+        self.target_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.row_builtin = self._row()
+        self._label(self.row_builtin, "内置适配：").pack(side=tk.LEFT)
+        self.builtin_combo = ctk.CTkOptionMenu(
+            self.row_builtin,
+            values=[self.APP_NAMES[app_id] for app_id in self.BUILTIN_APP_IDS],
+            variable=self.builtin_var,
+            width=scaled(self, 230),
+            font=_dialog_font(self),
+            command=self._on_builtin_changed,
+        )
+        self.builtin_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.row_name = self._row()
+        self._label(self.row_name, "应用名：").pack(side=tk.LEFT)
+        ctk.CTkEntry(self.row_name, textvariable=self.name_var, font=_dialog_font(self)).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         row = self._row()
         self._label(row, "快捷键：").pack(side=tk.LEFT)
@@ -468,16 +565,24 @@ class EntryDialog(_BindXDialog):
         ctk.CTkCheckBox(row, text="", variable=self.enabled_var, width=scaled(self, 28), font=_dialog_font(self)).pack(side=tk.LEFT)
 
         row = self._row()
-        self._label(row, "启动未运行：").pack(side=tk.LEFT)
-        ctk.CTkCheckBox(row, text="", variable=self.launch_var, width=scaled(self, 28), font=_dialog_font(self)).pack(side=tk.LEFT)
+        self._label(row, "托盘隐藏：").pack(side=tk.LEFT)
+        ctk.CTkCheckBox(row, text="", variable=self.tray_var, width=scaled(self, 28), font=_dialog_font(self)).pack(side=tk.LEFT)
 
         row = self._row()
-        self._label(row, "安装路径：").pack(side=tk.LEFT)
-        ctk.CTkEntry(row, textvariable=self.path_var, font=_dialog_font(self)).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self._secondary_button(row, "浏览", self._browse, width=82).pack(side=tk.LEFT, padx=(scaled(self, 8), 0))
+        self._label(row, "多窗口：").pack(side=tk.LEFT)
+        ctk.CTkCheckBox(row, text="", variable=self.multi_window_var, width=scaled(self, 28), font=_dialog_font(self)).pack(side=tk.LEFT)
+
+        row = self._row()
+        self._label(row, "热键启动：").pack(side=tk.LEFT)
+        ctk.CTkCheckBox(row, text="", variable=self.launch_var, width=scaled(self, 28), font=_dialog_font(self)).pack(side=tk.LEFT)
+
+        self.row_path = self._row()
+        self._label(self.row_path, "安装路径：").pack(side=tk.LEFT)
+        ctk.CTkEntry(self.row_path, textvariable=self.path_var, font=_dialog_font(self)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._secondary_button(self.row_path, "浏览", self._browse, width=82).pack(side=tk.LEFT, padx=(scaled(self, 8), 0))
 
         self.row_exe = self._row()
-        self._label(self.row_exe, "exe 名称：").pack(side=tk.LEFT)
+        self._label(self.row_exe, "进程名：").pack(side=tk.LEFT)
         ctk.CTkEntry(self.row_exe, textvariable=self.exe_var, font=_dialog_font(self)).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.row_keyword = self._row()
@@ -495,6 +600,67 @@ class EntryDialog(_BindXDialog):
         self._on_app_changed()
         self._center_on_parent()
 
+    def _target_type_for_entry(self, config_entry):
+        target_type = config_entry.get("target_type")
+        if target_type == "tray":
+            return "win32"
+        if target_type == "uwp_multi":
+            return "uwp"
+        app_id = config_entry.get("app", "generic")
+        if app_id in self.BUILTIN_APP_IDS:
+            return "builtin"
+        if target_type in self.TARGET_TYPE_IDS:
+            return target_type
+        if app_id == "web_app":
+            return "browser_tab"
+        return "win32"
+
+    def _is_tray_aware(self, config_entry):
+        tray_aware = config_entry.get("tray_aware")
+        if isinstance(tray_aware, bool):
+            return tray_aware
+        if config_entry.get("target_type") == "tray":
+            return True
+        return config_entry.get("app") == "cloudmusic"
+
+    def _is_multi_window(self, config_entry):
+        multi_window = config_entry.get("multi_window")
+        if isinstance(multi_window, bool):
+            return multi_window
+        return config_entry.get("target_type") == "uwp_multi"
+
+    def _selected_target_type(self):
+        return self.TARGET_TYPE_NAME_TO_ID.get(self.target_type_var.get(), self.target_type_var.get())
+
+    def _selected_builtin_app(self):
+        return self.APP_NAME_TO_ID.get(self.builtin_var.get(), self.builtin_var.get())
+
+    @staticmethod
+    def _display_path(path):
+        return str(path or "").replace("\\", "/")
+
+    def _resolve_first_existing_path(self, candidates):
+        for candidate in candidates or []:
+            display_path = self._display_path(os.path.expandvars(candidate))
+            if Path(display_path).exists():
+                return display_path
+        return ""
+
+    def _apply_builtin_preset(self):
+        builtin_app = self._selected_builtin_app()
+        preset = self.BUILTIN_PRESETS.get(builtin_app, {})
+        self.tray_var.set(bool(preset.get("tray_aware", False)))
+        self.multi_window_var.set(bool(preset.get("multi_window", False)))
+        self.launch_var.set(bool(preset.get("launch_if_not_running", False)))
+        self.exe_var.set(preset.get("exe_name", ""))
+        self.name_var.set(self.APP_NAMES.get(builtin_app, ""))
+        self.keyword_var.set(preset.get("title_keyword", ""))
+        self.path_var.set(self._resolve_first_existing_path(preset.get("path_candidates", [])))
+
+    def _on_builtin_changed(self, _value=None):
+        self._apply_builtin_preset()
+        self._on_app_changed()
+
     def _capture_hotkey(self):
         dlg = HotkeyCaptureDialog(self, self.hotkey_var.get())
         self.wait_window(dlg)
@@ -508,26 +674,55 @@ class EntryDialog(_BindXDialog):
             parent=self,
         )
         if path:
-            self.path_var.set(path)
+            self.path_var.set(self._display_path(path))
+            self.exe_var.set(Path(path).name)
+            self._refresh_exe_row()
+
+    def _refresh_exe_row(self):
+        target_type = self._selected_target_type()
+        if target_type in {"builtin", "browser_tab"}:
+            self.row_exe.pack_forget()
+            return
+        if self.path_var.get().strip():
+            self.row_exe.pack_forget()
+        else:
+            self.row_exe.pack(fill=tk.X, pady=(0, scaled(self, 10)))
 
     def _on_app_changed(self, _value=None):
-        app = self.app_var.get()
-        if app == "generic":
-            self.row_exe.pack(fill=tk.X, pady=(0, scaled(self, 10)))
-            self.row_keyword.pack(fill=tk.X, pady=(0, scaled(self, 10)))
-            self.row_browser.pack_forget()
-            if self.entry is None:
-                self.launch_var.set(True)
-        elif app == "web_app":
-            self.row_exe.pack_forget()
-            self.row_keyword.pack(fill=tk.X, pady=(0, scaled(self, 10)))
-            self.row_browser.pack(fill=tk.X, pady=(0, scaled(self, 10)))
-        else:
+        target_type = self._selected_target_type()
+
+        if target_type == "builtin":
+            self.row_builtin.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            self.row_name.pack_forget()
             self.row_exe.pack_forget()
             self.row_keyword.pack_forget()
             self.row_browser.pack_forget()
+            self.row_path.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            if self.entry is None:
+                self._apply_builtin_preset()
+        elif target_type == "browser_tab":
+            self.row_builtin.pack_forget()
+            self.row_name.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            self.row_exe.pack_forget()
+            self.row_keyword.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            self.row_browser.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            self.row_path.pack_forget()
             if self.entry is None:
                 self.launch_var.set(False)
+        else:
+            self.row_builtin.pack_forget()
+            self.row_name.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+            if target_type == "uwp":
+                self.row_keyword.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+                self.row_path.pack_forget()
+                self.row_exe.pack_forget()
+            else:
+                self.row_keyword.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+                self.row_path.pack(fill=tk.X, pady=(0, scaled(self, 10)))
+                self._refresh_exe_row()
+            self.row_browser.pack_forget()
+            if self.entry is None:
+                self.launch_var.set(True)
 
     def _on_ok(self):
         hotkey = self.hotkey_var.get().strip()
@@ -535,14 +730,18 @@ class EntryDialog(_BindXDialog):
             messagebox.showwarning("提示", "请录制快捷键", parent=self)
             return
 
-        app = self.app_var.get()
-        if app == "web_app":
+        target_type = self._selected_target_type()
+        if target_type == "browser_tab":
             keyword = self.keyword_var.get().strip()
             if not keyword:
-                messagebox.showwarning("提示", "网页应用必须填写标题关键词", parent=self)
+                messagebox.showwarning("提示", "浏览器 App 必须填写标题关键词", parent=self)
                 return
             self.result = {
                 "app": "web_app",
+                "name": self.name_var.get().strip(),
+                "target_type": target_type,
+                "tray_aware": False,
+                "multi_window": self.multi_window_var.get(),
                 "hotkey": hotkey,
                 "enabled": self.enabled_var.get(),
                 "launch_if_not_running": False,
@@ -553,22 +752,31 @@ class EntryDialog(_BindXDialog):
             self.destroy()
             return
 
+        app = self._selected_builtin_app() if target_type == "builtin" else "generic"
         self.result = {
             "app": app,
+            "name": self.name_var.get().strip() if app == "generic" else EntryDialog.APP_NAMES.get(app, app),
+            "target_type": target_type,
+            "tray_aware": self.tray_var.get(),
+            "multi_window": self.multi_window_var.get(),
             "hotkey": hotkey,
             "enabled": self.enabled_var.get(),
             "launch_if_not_running": self.launch_var.get(),
-            "install_path": self.path_var.get().strip(),
+            "install_path": self._display_path(self.path_var.get().strip()),
         }
         if app == "generic":
             exe_name = self.exe_var.get().strip()
             install_path = self.path_var.get().strip()
-            if not exe_name and not install_path:
-                messagebox.showwarning("提示", "通用应用必须填写 exe 名称或安装路径", parent=self)
+            display_name = self.name_var.get().strip()
+            keyword = self.keyword_var.get().strip()
+            if not exe_name and not install_path and not display_name and not keyword:
+                messagebox.showwarning("提示", "请至少填写应用名、标题关键词、安装路径或进程名", parent=self)
                 return
-            if exe_name:
+            if install_path:
+                self.result["exe_name"] = Path(install_path).name
+            elif exe_name:
                 self.result["exe_name"] = exe_name
-            self.result["title_keyword"] = self.keyword_var.get().strip()
+            self.result["title_keyword"] = keyword
 
         self.destroy()
 
@@ -892,15 +1100,17 @@ class HotKeyTab(ctk.CTkFrame):
         list_frame = ctk.CTkFrame(self, corner_radius=10)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ("app", "hotkey", "enabled", "registered", "launch", "path")
+        columns = ("target", "app", "hotkey", "enabled", "registered", "launch", "path")
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
+        self.tree.heading("target", text="类型")
         self.tree.heading("app", text="应用")
         self.tree.heading("hotkey", text="快捷键")
         self.tree.heading("enabled", text="启用")
         self.tree.heading("registered", text="注册")
-        self.tree.heading("launch", text="启动未运行")
+        self.tree.heading("launch", text="热键启动")
         self.tree.heading("path", text="安装路径")
-        self.tree.column("app", width=120, minwidth=80)
+        self.tree.column("target", width=150, minwidth=110)
+        self.tree.column("app", width=140, minwidth=90)
         self.tree.column("hotkey", width=120, minwidth=100)
         self.tree.column("enabled", width=60, minwidth=50, anchor=tk.CENTER)
         self.tree.column("registered", width=90, minwidth=70, anchor=tk.CENTER)
@@ -915,7 +1125,7 @@ class HotKeyTab(ctk.CTkFrame):
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-3>", self._on_right_click)
 
-        self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu = tk.Menu(self, tearoff=0, font=menu_font(self))
         self.context_menu.add_command(label="编辑", command=self._edit_entry)
         self.context_menu.add_command(label="启用/禁用", command=self._toggle_entry)
         self.context_menu.add_separator()
@@ -926,23 +1136,45 @@ class HotKeyTab(ctk.CTkFrame):
         self.status_label = ctk.CTkLabel(status_frame, text="就绪", text_color="#71717a", font=ui_font(self, 14))
         self.status_label.pack(side=tk.LEFT, padx=2, pady=(8, 0))
 
+    def refresh_native_menu_style(self):
+        self.context_menu.configure(font=menu_font(self))
+
     def _refresh_list(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
         for entry in self.manager.entries:
-            app_id = entry["config_entry"].get("app", "")
+            config_entry = entry["config_entry"]
+            app_id = config_entry.get("app", "")
+            target_type = config_entry.get("target_type")
+            if target_type not in EntryDialog.TARGET_TYPE_IDS:
+                if app_id == "web_app":
+                    target_type = "browser_tab"
+                elif target_type == "tray":
+                    target_type = "win32"
+                elif target_type == "uwp_multi":
+                    target_type = "uwp"
+                else:
+                    target_type = EntryDialog.BUILTIN_TARGET_TYPES.get(app_id, "win32")
+            if app_id in EntryDialog.BUILTIN_APP_IDS:
+                target_type = "builtin"
+            target_name = EntryDialog.TARGET_TYPE_NAMES.get(target_type, "Win32 窗口")
+            if config_entry.get("tray_aware") or config_entry.get("target_type") == "tray":
+                target_name = f"{target_name} + 托盘"
+            if config_entry.get("multi_window") or config_entry.get("target_type") == "uwp_multi":
+                target_name = f"{target_name} + 多窗口"
+            display_name = config_entry.get("name", "").strip()
             if app_id == "generic":
-                exe_name = entry["config_entry"].get("exe_name", "")
+                exe_name = config_entry.get("exe_name", "")
                 if not exe_name:
-                    install_path = entry["config_entry"].get("install_path", "")
+                    install_path = config_entry.get("install_path", "")
                     if install_path:
                         exe_name = Path(install_path).name
-                app_name = f"通用 | {exe_name}" if exe_name else "通用"
+                app_name = display_name or exe_name or config_entry.get("title_keyword", "") or "通用应用"
             elif app_id == "web_app":
-                exe_name = entry["config_entry"].get("exe_name", "")
+                exe_name = config_entry.get("exe_name", "")
                 browser = "Chrome" if exe_name == "chrome.exe" else "Edge"
-                keyword = entry["config_entry"].get("title_keyword", "")
-                app_name = f"网页 | {browser} | {keyword}"
+                keyword = config_entry.get("title_keyword", "")
+                app_name = display_name or (f"{browser} | {keyword}" if keyword else browser)
             else:
                 app_name = EntryDialog.APP_NAMES.get(app_id, app_id)
             hotkey = entry["hotkey"]
@@ -956,10 +1188,10 @@ class HotKeyTab(ctk.CTkFrame):
             else:
                 err = entry.get("last_error")
                 registered = f"失败 {err}" if err else "待注册"
-            launch = "✓" if entry["config_entry"].get("launch_if_not_running", False) else "✗"
-            path = entry["config_entry"].get("install_path", "")
+            launch = "✓" if config_entry.get("launch_if_not_running", False) else "✗"
+            path = EntryDialog._display_path(config_entry.get("install_path", ""))
             self.tree.insert("", tk.END, iid=str(entry["id"]),
-                             values=(app_name, hotkey, enabled, registered, launch, path))
+                             values=(target_name, app_name, hotkey, enabled, registered, launch, path))
         count = len(self.manager.entries)
         self.status_label.configure(text=f"共 {count} 个条目")
 
@@ -980,6 +1212,10 @@ class HotKeyTab(ctk.CTkFrame):
                     launch_if_not_running=data["launch_if_not_running"],
                     install_path=data["install_path"],
                     exe_name=data.get("exe_name", ""), title_keyword=data.get("title_keyword", ""),
+                    name=data.get("name", ""),
+                    target_type=data.get("target_type", ""),
+                    tray_aware=data.get("tray_aware", False),
+                    multi_window=data.get("multi_window", False),
                 )
             except ValueError as e:
                 messagebox.showerror("错误", str(e), parent=self)
@@ -1006,6 +1242,10 @@ class HotKeyTab(ctk.CTkFrame):
                     enabled=data["enabled"], launch_if_not_running=data["launch_if_not_running"],
                     install_path=data["install_path"],
                     exe_name=data.get("exe_name", ""), title_keyword=data.get("title_keyword", ""),
+                    name=data.get("name", ""),
+                    target_type=data.get("target_type", ""),
+                    tray_aware=data.get("tray_aware", False),
+                    multi_window=data.get("multi_window", False),
                 )
             except ValueError as e:
                 messagebox.showerror("错误", str(e), parent=self)
@@ -1042,14 +1282,13 @@ class HotKeyTab(ctk.CTkFrame):
         entry = self.manager.entry_map.get(entry_id)
         if not entry:
             return
-        if column == "#3":
+        if column == "#4":
             self.manager.toggle_entry(entry_id)
             self._refresh_list()
             self.after(100, self._refresh_list)
-        elif column == "#5":
+        elif column == "#6":
             old_val = entry["config_entry"].get("launch_if_not_running", False)
-            entry["config_entry"]["launch_if_not_running"] = not old_val
-            self.manager._save_config()
+            self.manager.set_launch_if_not_running(entry_id, not old_val)
             self._refresh_list()
         else:
             self._edit_entry()
@@ -1546,7 +1785,7 @@ class MouseTab(ctk.CTkFrame):
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-3>", self._on_right_click)
 
-        self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu = tk.Menu(self, tearoff=0, font=menu_font(self))
         self.context_menu.add_command(label="编辑", command=self._edit_entry)
         self.context_menu.add_command(label="启用/禁用", command=self._toggle_enabled)
         self.context_menu.add_separator()
@@ -1556,6 +1795,9 @@ class MouseTab(ctk.CTkFrame):
         status_frame.pack(fill=tk.X)
         self.status_label = ctk.CTkLabel(status_frame, text="就绪", text_color="#71717a", font=ui_font(self, 14))
         self.status_label.pack(side=tk.LEFT, padx=2, pady=(8, 0))
+
+    def refresh_native_menu_style(self):
+        self.context_menu.configure(font=menu_font(self))
 
     def _refresh_list(self):
         for item in self.tree.get_children():
@@ -1926,9 +2168,9 @@ class BindXApp(ctk.CTk):
         self.after(500, self._refresh_status_loop)
 
     def _show_tray_menu(self):
-        menu_font = ("Microsoft YaHei UI", scaled(self, FONT_PRESET_TRAY_SIZE.get(self._get_font_preset(), FONT_PRESET_TRAY_SIZE["常规"])))
-        menu = tk.Menu(self, tearoff=0, font=menu_font)
-        menu.configure(font=menu_font)
+        current_menu_font = menu_font(self)
+        menu = tk.Menu(self, tearoff=0, font=current_menu_font)
+        menu.configure(font=current_menu_font)
         hook_state = "运行中" if self.controller.trigger_engine.running else "未运行"
         menu.add_command(label=f"Hook：{hook_state}", state=tk.DISABLED)
         menu.add_command(
@@ -2017,3 +2259,5 @@ class BindXApp(ctk.CTk):
             return
         self.controller.save_font_preset(value)
         self._apply_adaptive_table_style()
+        self.hotkey_tab.refresh_native_menu_style()
+        self.mouse_tab.refresh_native_menu_style()

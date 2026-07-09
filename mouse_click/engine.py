@@ -1,40 +1,22 @@
 # -*- coding: utf-8 -*-
 
-import json
-import os
-import sys
 import threading
 import time
-from pathlib import Path
 
-CONFIG_FILE = "config.json"
 DEFAULT_CONFIG = {"mappings": [], "mouse_mappings": []}
 
-
-def get_base_dir():
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+import config_store
 
 
 def load_config():
-    config_path = get_base_dir() / CONFIG_FILE
-    if not config_path.exists():
-        return dict(DEFAULT_CONFIG)
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return dict(DEFAULT_CONFIG)
+    config = config_store.load_mouse_config()
     config.setdefault("mappings", [])
     config.setdefault("mouse_mappings", [])
     return config
 
 
 def save_config(config):
-    config_path = get_base_dir() / CONFIG_FILE
-    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp_path, config_path)
+    config_store.save_mouse_config(config)
 
 
 class RemapperEngine:

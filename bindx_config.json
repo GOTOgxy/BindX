@@ -1,8 +1,116 @@
 {
-  "hotkey_running": true,
-  "mouse_running": true,
-  "window_size": "946x582",
-  "window_zoomed": false,
-  "font_preset": "常规",
-  "autostart_enabled": true
+  "app": {
+    "hotkey_running": true,
+    "mouse_running": true,
+    "window_size": "946x582",
+    "window_zoomed": false,
+    "font_preset": "常规",
+    "autostart_enabled": true
+  },
+  "hotkeys": {
+    "display_name": "App Hotkey Manager",
+    "mutex_name": "Global\\AppHotkeyManager",
+    "entries": [
+      {
+        "app": "cloudmusic",
+        "hotkey": "CTRL+ALT+Q",
+        "launch_if_not_running": false,
+        "install_path": "",
+        "enabled": true,
+        "_runtime_profile": {
+          "show_behavior": "activate_window",
+          "hide_behavior": "tray"
+        }
+      },
+      {
+        "app": "zotero",
+        "hotkey": "CTRL+ALT+Z",
+        "launch_if_not_running": true,
+        "install_path": "C:\\Program Files\\Zotero\\zotero.exe",
+        "enabled": true,
+        "_runtime_profile": {
+          "show_behavior": "activate_window",
+          "hide_behavior": "minimize"
+        }
+      },
+      {
+        "app": "termius",
+        "hotkey": "CTRL+Q",
+        "launch_if_not_running": true,
+        "install_path": "",
+        "enabled": true,
+        "_runtime_profile": {
+          "show_behavior": "simple_activate",
+          "hide_behavior": "simple_minimize"
+        }
+      },
+      {
+        "app": "hot_key_manager",
+        "name": "BindX",
+        "hotkey": "CTRL+ALT+H",
+        "enabled": true,
+        "_runtime_profile": {}
+      },
+      {
+        "app": "generic",
+        "hotkey": "CTRL+ALT+K",
+        "launch_if_not_running": false,
+        "install_path": "C:/Program Files (x86)/Tencent/QQMusic/QQMusic.exe",
+        "enabled": false,
+        "_runtime_profile": {}
+      },
+      {
+        "app": "web_app",
+        "hotkey": "ALT + CTRL + G",
+        "launch_if_not_running": false,
+        "install_path": "",
+        "enabled": true,
+        "exe_name": "msedge.exe",
+        "title_keyword": "Google Gemini",
+        "_runtime_profile": {
+          "show_behavior": "activate_window",
+          "hide_behavior": "minimize"
+        }
+      },
+      {
+        "app": "generic",
+        "hotkey": "ALT+CTRL+A",
+        "launch_if_not_running": false,
+        "install_path": "C:/Users/gxy/AppData/Local/Programs/QianwenApp/qianwen.exe",
+        "enabled": true,
+        "_runtime_profile": {
+          "show_behavior": "relaunch_existing_instance",
+          "hide_behavior": "minimize"
+        }
+      }
+    ]
+  },
+  "mouse": {
+    "mappings": [
+      {
+        "trigger": [
+          "ctrl",
+          "p"
+        ],
+        "output": [
+          "ctrl",
+          "alt",
+          "w"
+        ],
+        "description": "Ctrl+P -> Ctrl+Alt+W",
+        "enabled": false
+      }
+    ],
+    "mouse_mappings": [
+      {
+        "button": "x1",
+        "output": [
+          "ctrl",
+          "w"
+        ],
+        "description": "鼠标侧键X1 -> Ctrl+W",
+        "enabled": true
+      }
+    ]
+  }
 }

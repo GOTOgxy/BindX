@@ -1,8 +1,8 @@
-# App Hotkey Manager
+# App Hotkey Logic
 
-Windows 全局快捷键管理工具。通过系统托盘运行，支持为多个应用绑定全局快捷键，实现一键切换/隐藏/启动。
+这是 BindX 内联的热键业务模块，负责全局热键解析、应用窗口切换/隐藏/启动，以及相关 Win32 处理。
 
-零依赖，纯 Python stdlib 实现，通过 ctypes 直接调用 Win32 API。
+当前目录不再单独提供 GUI、托盘入口或独立配置文件；运行与配置统一由 BindX 主程序负责。
 
 ## 功能
 
@@ -11,7 +11,7 @@ Windows 全局快捷键管理工具。通过系统托盘运行，支持为多个
 - 内置管理界面（tkinter），支持添加/编辑/删除/启用/禁用快捷键
 - 支持录制快捷键（自动识别修饰键 + 主键）
 - 允许快捷键重复，通过启用/禁用控制
-- 双击列表直接切换"启用"和"启动未运行"状态
+- 双击列表直接切换"启用"和"热键启动"状态
 - 工具栏"运行中"全局开关，一键启用/禁用所有热键
 - 配置文件可选，缺失时以空配置启动
 - 单实例运行（Mutex）
@@ -69,9 +69,6 @@ Windows 全局快捷键管理工具。通过系统托盘运行，支持为多个
 | `gui.py` | 界面：tkinter UI、托盘图标、对话框 |
 | `app_hotkey_config.json` | 运行时配置（可选） |
 | `app_hotkey_manager.bat` | 双击启动（`pythonw app.py`） |
-| `install_startup.bat` | 安装开机自启动 |
-| `uninstall_startup.bat` | 卸载开机自启动 |
-| `pin_to_start.bat` | 在开始菜单创建快捷方式，手动固定到开始屏幕 |
 | `requirements.txt` | Python 依赖（无第三方依赖） |
 
 ## 技术架构
@@ -248,9 +245,6 @@ WIN+1
 | `gui.py` | tkinter UI（主界面、对话框、托盘） |
 | `app_hotkey_config.json` | 运行时配置 |
 | `app_hotkey_manager.bat` | 双击启动 |
-| `install_startup.bat` | 安装开机自启动 |
-| `uninstall_startup.bat` | 卸载开机自启动 |
-| `pin_to_start.bat` | 在开始菜单创建快捷方式 |
 | `requirements.txt` | Python 依赖（空，无第三方依赖） |
 | `README.md` | 项目文档 |
 
@@ -272,15 +266,3 @@ pythonw app.py
 - 关闭窗口（X）：最小化到托盘
 - 配置 `hot_key_manager` 快捷键：切换界面显示/隐藏
 
-## 开机自启动
-
-```bat
-install_startup.bat
-uninstall_startup.bat
-```
-
-将启动脚本复制到 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`，用户登录后自动运行。
-
-## 固定到开始屏幕
-
-双击 `pin_to_start.bat`，在开始菜单创建快捷方式后右键固定到开始屏幕。

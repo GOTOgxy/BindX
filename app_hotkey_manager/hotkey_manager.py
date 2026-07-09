@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import ctypes
-import json
 import os
 import subprocess
 import sys
@@ -11,6 +10,7 @@ import winreg
 from ctypes import wintypes
 from pathlib import Path
 
+import config_store
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -54,7 +54,6 @@ WM_RBUTTONUP = 0x0205
 
 TRAY_ICON_ID = 1
 
-CONFIG_FILE_NAME = "app_hotkey_config.json"
 DEFAULT_MUTEX_NAME = "Global\\AppHotkeyManager"
 
 
@@ -119,6 +118,12 @@ user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 
 user32.IsWindowVisible.argtypes = [wintypes.HWND]
 user32.IsWindowVisible.restype = wintypes.BOOL
+
+user32.IsWindow.argtypes = [wintypes.HWND]
+user32.IsWindow.restype = wintypes.BOOL
+
+user32.IsWindowEnabled.argtypes = [wintypes.HWND]
+user32.IsWindowEnabled.restype = wintypes.BOOL
 
 user32.GetForegroundWindow.restype = wintypes.HWND
 
@@ -348,8 +353,6 @@ def force_foreground_window(hwnd: int) -> bool:
             attached_foreground = bool(user32.AttachThreadInput(current_thread, foreground_thread, True))
 
         user32.BringWindowToTop(hwnd)
-        user32.SetActiveWindow(hwnd)
-        user32.SetFocus(hwnd)
         ok = bool(user32.SetForegroundWindow(hwnd))
         return ok or user32.GetForegroundWindow() == hwnd
     finally:
@@ -373,6 +376,8 @@ def iter_windows_for_pid(pid: int):
 
 
 def iter_processes_by_name(exe_name: str):
+    if not exe_name:
+        return
     snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if snapshot == INVALID_HANDLE_VALUE:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -388,6 +393,37 @@ def iter_processes_by_name(exe_name: str):
             has_item = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
     finally:
         kernel32.CloseHandle(snapshot)
+
+
+def find_window_by_title_keyword(keyword: str) -> int | None:
+    keyword = (keyword or "").casefold()
+    if not keyword:
+        return None
+    candidates = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def callback(hwnd, _lparam):
+        if user32.GetWindow(hwnd, GW_OWNER):
+            return True
+        title = get_window_text(hwnd)
+        if not title or keyword not in title.casefold():
+            return True
+        class_name = get_class_name(hwnd)
+        is_visible = bool(user32.IsWindowVisible(hwnd))
+        rect = wintypes.RECT()
+        if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+        else:
+            area = 0
+        penalty = 0 if is_visible else 1000
+        if class_name in {"IME", "MSCTFIME UI", "GDI+ Hook Window Class"}:
+            penalty += 500
+        candidates.append(((penalty, -area, int(hwnd)), hwnd))
+        return True
+
+    user32.EnumWindows(callback, 0)
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1] if candidates else None
 
 
 def get_process_image_path(pid: int) -> str | None:
@@ -453,7 +489,14 @@ class AppController:
         app_paths_registry_names: list[str] | None = None,
         launch_timeout_seconds: float = 8.0,
         title_keyword: str = "",
+        display_name: str = "",
+        behavior_kind: str = "desktop_window",
         relaunch_if_no_window: bool = False,
+        allow_relaunch_while_running: bool = False,
+        simple_window_control: bool = False,
+        disable_window_memory: bool = False,
+        runtime_profile: dict | None = None,
+        persist_callback=None,
     ):
         self.app_id = app_id
         self.exe_name = exe_name
@@ -469,10 +512,109 @@ class AppController:
         self.app_paths_registry_names = app_paths_registry_names or []
         self.launch_timeout_seconds = launch_timeout_seconds
         self.title_keyword = title_keyword
+        self.display_name = display_name
+        self.behavior_kind = behavior_kind
         self.relaunch_if_no_window = relaunch_if_no_window
+        self.allow_relaunch_while_running = allow_relaunch_while_running
+        self.simple_window_control = simple_window_control
+        self.disable_window_memory = disable_window_memory
+        self.runtime_profile = runtime_profile if isinstance(runtime_profile, dict) else {}
+        self.session_state = {}
+        self._persist_callback = persist_callback
+
+    def _persist_runtime_profile(self):
+        if callable(self._persist_callback):
+            self._persist_callback()
+
+    def _profile_set(self, **kwargs):
+        changed = False
+        for key, value in kwargs.items():
+            if self.runtime_profile.get(key) != value:
+                self.runtime_profile[key] = value
+                changed = True
+        if changed:
+            self._persist_runtime_profile()
+
+    def _remember_window(self, hwnd: int):
+        if self.disable_window_memory:
+            return
+        if not hwnd or not user32.IsWindow(hwnd):
+            return
+        title = get_window_text(hwnd)
+        class_name = get_class_name(hwnd)
+        is_visible = bool(user32.IsWindowVisible(hwnd))
+        if self._should_skip_window(class_name, title, is_visible):
+            return
+        self.session_state.update(
+            {
+                "last_hwnd": int(hwnd),
+                "last_pid": get_window_pid(hwnd),
+                "last_title": title,
+                "last_class": class_name,
+            }
+        )
+
+    def _mark_action(self, action: str, hwnd: int | None = None):
+        self.session_state["last_action"] = action
+        self.session_state["last_action_at"] = time.time()
+        if hwnd and not self.disable_window_memory:
+            self.session_state.update(
+                {
+                    "last_hwnd": int(hwnd),
+                    "last_pid": get_window_pid(hwnd),
+                    "last_title": get_window_text(hwnd),
+                    "last_class": get_class_name(hwnd),
+                }
+            )
+
+    def _record_behavior(self, show_behavior: str | None = None, hide_behavior: str | None = None):
+        data = {}
+        if show_behavior:
+            data["show_behavior"] = show_behavior
+        if hide_behavior:
+            data["hide_behavior"] = hide_behavior
+        if data:
+            self._profile_set(**data)
 
     def iter_target_processes(self):
         return iter_processes_by_name(self.exe_name)
+
+    def title_match_keyword(self) -> str:
+        return self.title_keyword or self.display_name
+
+    def diagnostic_snapshot(self) -> dict:
+        pids = list(self.iter_target_processes())
+        hwnd, pid = self._find_best_window(pids) if pids else (None, None)
+        return {
+            "app_id": self.app_id,
+            "behavior_kind": self.behavior_kind,
+            "exe_name": self.exe_name,
+            "display_name": self.display_name,
+            "title_keyword": self.title_keyword,
+            "launch_if_not_running": self.launch_if_not_running,
+            "pids": pids,
+            "selected_pid": pid,
+            "selected_hwnd": int(hwnd) if hwnd else None,
+            "selected_state": self.resolve_state(hwnd),
+            "selected_title": get_window_text(hwnd) if hwnd else "",
+            "selected_class": get_class_name(hwnd) if hwnd else "",
+            "runtime_profile": dict(self.runtime_profile),
+            "session_state": dict(self.session_state),
+        }
+
+    def _should_skip_window(self, class_name: str, title: str, is_visible: bool) -> bool:
+        if class_name in self.ignored_window_classes:
+            return True
+        title_text = title.strip()
+        if self.app_id == "web_app":
+            if not title_text or (self.title_keyword and self.title_keyword not in title_text):
+                return True
+        if self.app_id in {"termius", "generic", "web_app"}:
+            if not title_text and class_name.startswith("Chrome_WidgetWin_"):
+                return True
+            if not is_visible and class_name.startswith("Chrome_WidgetWin_"):
+                return True
+        return False
 
     def _window_rank(self, hwnd: int, class_name: str, title: str, is_visible: bool) -> tuple[int, int, int, int]:
         rect = wintypes.RECT()
@@ -519,11 +661,10 @@ class AppController:
                 return True
 
             class_name = get_class_name(hwnd)
-            if class_name in self.ignored_window_classes:
-                return True
-
             title = get_window_text(hwnd)
             is_visible = bool(user32.IsWindowVisible(hwnd))
+            if self._should_skip_window(class_name, title, is_visible):
+                return True
             rank = self._window_rank(hwnd, class_name, title, is_visible)
 
             if class_name in self.primary_window_classes:
@@ -554,11 +695,61 @@ class AppController:
             return fallback[0][1]
         return None
 
+    def _get_candidate_windows(self, pid: int) -> list[int]:
+        candidates = []
+        remembered_hwnd = int(self.session_state.get("last_hwnd", 0) or 0)
+        remembered_title = str(self.session_state.get("last_title", "") or "")
+        remembered_class = str(self.session_state.get("last_class", "") or "")
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def callback(hwnd, _lparam):
+            if get_window_pid(hwnd) != pid:
+                return True
+            if user32.GetWindow(hwnd, GW_OWNER):
+                return True
+
+            class_name = get_class_name(hwnd)
+            title = get_window_text(hwnd)
+            is_visible = bool(user32.IsWindowVisible(hwnd))
+            if self._should_skip_window(class_name, title, is_visible):
+                return True
+            rank = list(self._window_rank(hwnd, class_name, title, is_visible))
+            if self.title_keyword and title and self.title_keyword in title:
+                rank[0] -= 260
+            elif self.title_keyword:
+                rank[0] += 180
+            if class_name in self.primary_window_classes:
+                rank[0] -= 180
+            if remembered_hwnd and hwnd == remembered_hwnd:
+                rank[0] -= 220
+            if remembered_title and title and title == remembered_title:
+                rank[0] -= 120
+            if remembered_class and class_name and class_name == remembered_class:
+                rank[0] -= 80
+            candidates.append((tuple(rank), hwnd))
+            return True
+
+        user32.EnumWindows(callback, 0)
+        candidates.sort(key=lambda item: item[0])
+        return [hwnd for _rank, hwnd in candidates]
+
+    def is_window_activatable(self, hwnd: int) -> bool:
+        if not hwnd:
+            return False
+        return bool(user32.IsWindowVisible(hwnd) and user32.IsWindowEnabled(hwnd))
+
+    def is_window_available(self, hwnd: int) -> bool:
+        if not hwnd or not user32.IsWindow(hwnd):
+            return False
+        if not user32.IsWindowVisible(hwnd) and not user32.IsIconic(hwnd):
+            return False
+        return True
+
     def is_foreground_window(self, hwnd: int) -> bool:
-        if not hwnd or not user32.IsWindowVisible(hwnd):
+        if not hwnd or not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
             return False
         foreground = user32.GetForegroundWindow()
-        if not foreground or not user32.IsWindowVisible(foreground):
+        if not foreground or not user32.IsWindowVisible(foreground) or user32.IsIconic(foreground):
             return False
         if foreground == hwnd:
             return True
@@ -608,40 +799,64 @@ class AppController:
             return False
         self._restore_to_taskbar(hwnd)
 
-        user32.ShowWindow(hwnd, SW_SHOWNA)
+        if self.simple_window_control:
+            user32.ShowWindow(hwnd, SW_RESTORE if user32.IsIconic(hwnd) else SW_SHOWNORMAL)
+            ok = force_foreground_window(hwnd)
+            if ok:
+                self._remember_window(hwnd)
+                self._mark_action("show", hwnd)
+                self._record_behavior(show_behavior="simple_activate")
+            return ok
+
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, SW_RESTORE)
-        elif user32.IsZoomed(hwnd):
-            user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED)
         else:
             user32.ShowWindow(hwnd, SW_SHOWNORMAL)
 
         user32.SetWindowPos(
             hwnd, HWND_TOPMOST,
             0, 0, 0, 0,
-            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW,
         )
         user32.SetWindowPos(
             hwnd, HWND_NOTOPMOST,
             0, 0, 0, 0,
-            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW,
         )
 
-        return force_foreground_window(hwnd)
+        ok = force_foreground_window(hwnd)
+        if ok:
+            self._remember_window(hwnd)
+            self._mark_action("show", hwnd)
+            self._record_behavior(show_behavior="activate_window")
+        return ok
 
     def hide_window(self, hwnd: int) -> bool:
         if not hwnd:
             return False
+        if self.simple_window_control:
+            user32.ShowWindow(hwnd, SW_MINIMIZE)
+            self._mark_action("hide", hwnd)
+            self._record_behavior(hide_behavior="simple_minimize")
+            return True
         if self.hide_mode == "tray":
-            return self._hide_to_tray(hwnd)
+            ok = self._hide_to_tray(hwnd)
+            if ok:
+                self._mark_action("hide", hwnd)
+                self._record_behavior(hide_behavior="tray")
+            return ok
         if self.hide_mode == "hide":
             if self.hide_from_taskbar:
                 self._hide_from_taskbar(hwnd)
             user32.ShowWindow(hwnd, SW_HIDE)
+            self._mark_action("hide", hwnd)
+            self._record_behavior(hide_behavior="hide")
             return True
         if self.hide_from_taskbar:
             self._hide_from_taskbar(hwnd)
         user32.ShowWindow(hwnd, SW_MINIMIZE)
+        self._mark_action("hide", hwnd)
+        self._record_behavior(hide_behavior="minimize")
         return True
 
     def _hide_to_tray(self, hwnd: int) -> bool:
@@ -660,16 +875,63 @@ class AppController:
                 hidden_any = True
         return hidden_any or not user32.IsWindowVisible(hwnd)
 
+    def _wait_for_relaunched_window_and_activate(
+        self,
+        pid: int,
+        previous_windows: set[int],
+        previous_hwnd: int | None,
+        timeout_seconds: float = 5.0,
+    ) -> bool:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            candidates = self._get_candidate_windows(pid)
+            for hwnd in candidates:
+                if hwnd not in previous_windows and self.is_window_activatable(hwnd) and not user32.IsIconic(hwnd):
+                    return self.activate_window(hwnd)
+
+            for hwnd in candidates:
+                if previous_hwnd and hwnd == previous_hwnd:
+                    continue
+                if self.is_window_activatable(hwnd) and not user32.IsIconic(hwnd):
+                    return self.activate_window(hwnd)
+
+            foreground = user32.GetForegroundWindow()
+            if foreground and get_window_pid(foreground) == pid and self.is_window_activatable(foreground):
+                title = get_window_text(foreground)
+                class_name = get_class_name(foreground)
+                if not self._should_skip_window(class_name, title, True):
+                    self._remember_window(foreground)
+                    self._mark_action("show", foreground)
+                    return True
+
+            time.sleep(0.15)
+
+        if previous_hwnd and self.is_window_activatable(previous_hwnd) and not user32.IsIconic(previous_hwnd):
+            return self.activate_window(previous_hwnd)
+        return False
+
     def relaunch_existing_instance(self, pid: int) -> bool:
+        if not self.allow_relaunch_while_running:
+            return False
         image_path = get_process_image_path(pid)
         if not image_path:
             return False
+        previous_windows = set(iter_windows_for_pid(pid))
+        previous_hwnd = int(self.session_state.get("last_hwnd", 0) or 0)
         try:
             subprocess.Popen([image_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError:
             return False
 
-        return self.wait_for_any_window_and_activate(existing_pids={pid}, timeout_seconds=5.0)
+        ok = self._wait_for_relaunched_window_and_activate(
+            pid,
+            previous_windows=previous_windows,
+            previous_hwnd=previous_hwnd if previous_hwnd in previous_windows else None,
+            timeout_seconds=5.0,
+        )
+        if ok:
+            self._record_behavior(show_behavior="relaunch_existing_instance")
+        return ok
 
     def read_app_path_from_registry(self) -> str | None:
         registry_names = self.app_paths_registry_names or [self.exe_name]
@@ -712,6 +974,111 @@ class AppController:
         except OSError:
             return False
 
+    def resolve_state(self, hwnd: int | None) -> str:
+        if not hwnd or not user32.IsWindow(hwnd):
+            return "missing"
+        if self.simple_window_control:
+            if user32.IsIconic(hwnd) or not user32.IsWindowVisible(hwnd):
+                return "hidden"
+            if self.is_foreground_window(hwnd):
+                return "shown"
+            return "background"
+        if self.is_foreground_window(hwnd):
+            return "shown"
+        if user32.IsIconic(hwnd):
+            return "hidden"
+        if hwnd in self._taskbar_hidden_hwnds:
+            return "hidden"
+        if not user32.IsWindowVisible(hwnd):
+            return "hidden"
+        if not user32.IsWindowEnabled(hwnd):
+            return "unavailable"
+        return "background"
+
+    def _get_remembered_window(self, pids: list[int]) -> int | None:
+        if self.disable_window_memory:
+            return None
+        hwnd = int(self.session_state.get("last_hwnd", 0) or 0)
+        if not hwnd or not user32.IsWindow(hwnd):
+            return None
+        if pids and get_window_pid(hwnd) not in pids:
+            return None
+        state = self.resolve_state(hwnd)
+        if state == "missing":
+            return None
+        return hwnd
+
+    def should_relaunch_for_show(self) -> bool:
+        if not self.allow_relaunch_while_running:
+            return False
+        show_behavior = self.runtime_profile.get("show_behavior")
+        if show_behavior == "relaunch_existing_instance":
+            return True
+        if self.hide_mode == "tray":
+            return True
+        if self.relaunch_if_no_window:
+            return True
+        if self.app_id in {"generic"}:
+            return True
+        return False
+
+    def should_prioritize_relaunch(self, hwnd: int | None) -> bool:
+        state = self.resolve_state(hwnd)
+        last_action = self.session_state.get("last_action")
+        if self.should_relaunch_for_show() and state in {"hidden", "unavailable"}:
+            return True
+        if self.app_id in {"generic", "web_app"} and last_action == "hide" and state != "shown":
+            return True
+        if self.runtime_profile.get("hide_behavior") == "tray" and state != "shown":
+            return True
+        return False
+
+    def _find_best_window(self, pids: list[int]) -> tuple[int | None, int | None]:
+        remembered_hwnd = self._get_remembered_window(pids)
+        if remembered_hwnd:
+            return remembered_hwnd, get_window_pid(remembered_hwnd)
+
+        fallback_pid = pids[0] if pids else None
+        for pid in pids:
+            main_hwnd = self.find_main_window(pid)
+            if main_hwnd:
+                return main_hwnd, pid
+            candidates = self._get_candidate_windows(pid)
+            for hwnd in candidates:
+                return hwnd, pid
+        return None, fallback_pid
+
+    def show_target(self, pids: list[int]) -> bool:
+        hwnd, pid = self._find_best_window(pids)
+        if pid and self.should_prioritize_relaunch(hwnd):
+            if self.relaunch_existing_instance(pid):
+                return True
+
+        if hwnd:
+            state = self.resolve_state(hwnd)
+            if state != "missing" and self.activate_window(hwnd):
+                return True
+
+        if pid and self.should_relaunch_for_show():
+            if self.relaunch_existing_instance(pid):
+                return True
+
+        if not pids and self.launch_if_not_running and self.launch_app():
+            return self.wait_for_any_window_and_activate()
+
+        if pid:
+            fallback = self.find_main_window(pid)
+            if fallback and fallback != hwnd and self.activate_window(fallback):
+                return True
+        return False
+
+    def hide_target(self, hwnd: int | None) -> bool:
+        if hwnd and self.hide_window(hwnd):
+            return True
+        if hwnd:
+            self._mark_action("hide", hwnd)
+        return False
+
     def wait_for_any_window_and_activate(self, existing_pids: set[int] | None = None, timeout_seconds: float | None = None) -> bool:
         existing_pids = existing_pids or set()
         deadline = time.time() + (timeout_seconds or self.launch_timeout_seconds)
@@ -719,40 +1086,61 @@ class AppController:
             pids = list(self.iter_target_processes())
             candidate_pids = [pid for pid in pids if pid not in existing_pids] or pids
             for pid in candidate_pids:
-                hwnd = self.find_main_window(pid)
-                if hwnd:
+                hwnd, _pid = self._find_best_window([pid])
+                if hwnd and self.resolve_state(hwnd) != "missing":
                     return self.activate_window(hwnd)
             time.sleep(0.15)
         return False
 
     def toggle(self):
-        pids = list(self.iter_target_processes())
-        if not pids:
-            if self.launch_if_not_running:
-                if self.launch_app():
-                    self.wait_for_any_window_and_activate()
+        if not self.exe_name:
+            hwnd = find_window_by_title_keyword(self.title_match_keyword())
+            state = self.resolve_state(hwnd)
+            if state == "shown":
+                self.hide_target(hwnd)
+            elif state in {"hidden", "background", "unavailable"}:
+                self.show_target([get_window_pid(hwnd)])
             return
 
-        for pid in pids:
-            hwnd = self.find_main_window(pid)
-            if hwnd:
-                if self.is_foreground_window(hwnd):
-                    self.hide_window(hwnd)
-                else:
-                    self.activate_window(hwnd)
+        pids = list(self.iter_target_processes())
+        if not pids:
+            if self.launch_if_not_running and self.launch_app():
+                self.wait_for_any_window_and_activate()
+            return
+
+        hwnd, pid = self._find_best_window(pids)
+        state = self.resolve_state(hwnd)
+        last_action = self.session_state.get("last_action")
+
+        if state == "shown":
+            self.hide_target(hwnd)
+            return
+
+        if last_action == "hide":
+            if self.show_target(pids):
                 return
 
-        if self.relaunch_if_no_window or self.launch_if_not_running:
-            self.relaunch_existing_instance(pids[0])
+        if state in {"hidden", "background", "unavailable"}:
+            if self.show_target(pids):
+                return
+
+        if state == "missing" and pid and self.allow_relaunch_while_running and self.relaunch_if_no_window:
+            self.relaunch_existing_instance(pid)
 
 
-def create_builtin_controller(app_id: str, entry: dict) -> AppController:
+def create_builtin_controller(app_id: str, entry: dict, persist_callback=None) -> AppController:
     app_id = app_id.lower()
     install_path = entry.get("install_path")
+    runtime_profile = entry.setdefault("_runtime_profile", {})
+    common = {
+        "runtime_profile": runtime_profile,
+        "persist_callback": persist_callback,
+    }
     if app_id == "cloudmusic":
         return AppController(
             app_id=app_id,
             exe_name="cloudmusic.exe",
+            behavior_kind="tray_app",
             primary_window_classes={"OrpheusBrowserHost"},
             ignored_window_classes={
                 "OrpheusShadow",
@@ -773,12 +1161,14 @@ def create_builtin_controller(app_id: str, entry: dict) -> AppController:
             launch_if_not_running=bool(entry.get("launch_if_not_running", False)),
             install_path=install_path,
             app_paths_registry_names=["cloudmusic.exe"],
+            **common,
         )
 
     if app_id == "zotero":
         return AppController(
             app_id=app_id,
             exe_name="zotero.exe",
+            behavior_kind="desktop_window",
             primary_window_classes={"MozillaWindowClass", "Chrome_WidgetWin_1"},
             ignored_window_classes={"MozillaDropShadowWindowClass"},
             hide_mode="minimize",
@@ -791,16 +1181,18 @@ def create_builtin_controller(app_id: str, entry: dict) -> AppController:
             ],
             app_paths_registry_names=["zotero.exe", "Zotero.exe"],
             launch_timeout_seconds=10.0,
+            **common,
         )
 
     if app_id == "termius":
         return AppController(
             app_id=app_id,
             exe_name="Termius.exe",
+            behavior_kind="electron_simple",
             primary_window_classes={"Chrome_WidgetWin_1"},
             ignored_window_classes=set(),
             hide_mode="minimize",
-            hide_from_taskbar=True,
+            hide_from_taskbar=False,
             launch_if_not_running=bool(entry.get("launch_if_not_running", True)),
             install_path=install_path,
             launch_candidates=[
@@ -810,17 +1202,23 @@ def create_builtin_controller(app_id: str, entry: dict) -> AppController:
             ],
             app_paths_registry_names=["Termius.exe", "termius.exe"],
             launch_timeout_seconds=10.0,
+            simple_window_control=True,
+            disable_window_memory=True,
+            **common,
         )
 
     if app_id == "generic":
         exe_name = entry.get("exe_name", "")
         if not exe_name and install_path:
             exe_name = Path(install_path).name
-        if not exe_name:
-            raise ValueError("generic 类型必须提供 exe_name 或 install_path")
+        display_name = entry.get("name", "")
+        title_keyword = entry.get("title_keyword", "")
+        if not exe_name and not title_keyword and not display_name:
+            raise ValueError("generic 类型必须提供 name、title_keyword、exe_name 或 install_path")
         return AppController(
             app_id=app_id,
             exe_name=exe_name,
+            behavior_kind="generic_single_instance",
             primary_window_classes=set(),
             ignored_window_classes={
                 "IME",
@@ -832,10 +1230,13 @@ def create_builtin_controller(app_id: str, entry: dict) -> AppController:
             },
             hide_mode="minimize",
             hide_from_taskbar=True,
-            launch_if_not_running=bool(entry.get("launch_if_not_running", False)),
+            launch_if_not_running=bool(entry.get("launch_if_not_running", False) and install_path),
             install_path=install_path,
-            title_keyword=entry.get("title_keyword", ""),
+            title_keyword=title_keyword,
+            display_name=display_name,
             relaunch_if_no_window=True,
+            allow_relaunch_while_running=True,
+            **common,
         )
 
     if app_id == "web_app":
@@ -848,6 +1249,7 @@ def create_builtin_controller(app_id: str, entry: dict) -> AppController:
         return AppController(
             app_id=app_id,
             exe_name=exe_name,
+            behavior_kind="browser_title",
             primary_window_classes=set(),
             ignored_window_classes={"IME", "MSCTFIME UI", "GDI+ Hook Window Class"},
             hide_mode="minimize",
@@ -855,6 +1257,8 @@ def create_builtin_controller(app_id: str, entry: dict) -> AppController:
             launch_if_not_running=False,
             install_path=None,
             title_keyword=title_keyword,
+            display_name=entry.get("name", ""),
+            **common,
         )
 
     if app_id == "hot_key_manager":
@@ -864,21 +1268,7 @@ def create_builtin_controller(app_id: str, entry: dict) -> AppController:
 
 
 def load_config() -> dict:
-    config_path = get_embedded_dir() / CONFIG_FILE_NAME
-    if not config_path.exists():
-        return {
-            "display_name": "App Hotkey Manager",
-            "mutex_name": DEFAULT_MUTEX_NAME,
-            "entries": [],
-        }
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {
-            "display_name": "App Hotkey Manager",
-            "mutex_name": DEFAULT_MUTEX_NAME,
-            "entries": [],
-        }
+    config = config_store.load_hotkey_config()
     config.setdefault("display_name", "App Hotkey Manager")
     config.setdefault("mutex_name", DEFAULT_MUTEX_NAME)
     config.setdefault("entries", [])
@@ -919,7 +1309,7 @@ class HotkeyManager:
             entry_id = self.next_id
             self.next_id += 1
 
-            controller = create_builtin_controller(app_id, raw_entry)
+            controller = create_builtin_controller(app_id, raw_entry, persist_callback=self._save_config)
             entry = {
                 "id": entry_id,
                 "hotkey": hotkey,
@@ -946,7 +1336,7 @@ class HotkeyManager:
                 "modifiers": MOD_CONTROL | MOD_ALT,
                 "virtual_key": ord("H"),
                 "controller": CallbackController(callback=lambda: None),
-                "config_entry": {"app": "hot_key_manager", "name": "Hot Key Manager", "hotkey": DEFAULT_SELF_HOTKEY},
+                "config_entry": {"app": "hot_key_manager", "name": "BindX", "hotkey": DEFAULT_SELF_HOTKEY},
                 "enabled": True,
                 "registered": False,
                 "last_error": None,
@@ -1093,7 +1483,10 @@ class HotkeyManager:
 
     def add_entry(self, app_id: str, hotkey: str, enabled: bool = True,
                   launch_if_not_running: bool = False, install_path: str = "",
-                  exe_name: str = "", title_keyword: str = "") -> dict | None:
+                  exe_name: str = "", title_keyword: str = "",
+                  name: str = "",
+                  target_type: str = "", tray_aware: bool = False,
+                  multi_window: bool = False) -> dict | None:
         modifiers, virtual_key = parse_hotkey(hotkey)
 
         entry_id = self.next_id
@@ -1105,13 +1498,22 @@ class HotkeyManager:
             "launch_if_not_running": launch_if_not_running,
             "install_path": install_path,
             "enabled": enabled,
+            "_runtime_profile": {},
         }
+        if target_type:
+            config_entry["target_type"] = target_type
+        if tray_aware:
+            config_entry["tray_aware"] = True
+        if multi_window:
+            config_entry["multi_window"] = True
+        if name:
+            config_entry["name"] = name
         if exe_name:
             config_entry["exe_name"] = exe_name
         if title_keyword:
             config_entry["title_keyword"] = title_keyword
 
-        controller = create_builtin_controller(app_id, config_entry)
+        controller = create_builtin_controller(app_id, config_entry, persist_callback=self._save_config)
         entry = {
             "id": entry_id,
             "hotkey": hotkey,
@@ -1135,7 +1537,10 @@ class HotkeyManager:
 
     def update_entry(self, entry_id: int, app_id: str, hotkey: str, enabled: bool,
                      launch_if_not_running: bool, install_path: str,
-                     exe_name: str = "", title_keyword: str = "") -> bool:
+                     exe_name: str = "", title_keyword: str = "",
+                     name: str = "",
+                     target_type: str = "", tray_aware: bool = False,
+                     multi_window: bool = False) -> bool:
         old_entry = self.entry_map.get(entry_id)
         if not old_entry:
             return False
@@ -1150,13 +1555,22 @@ class HotkeyManager:
             "launch_if_not_running": launch_if_not_running,
             "install_path": install_path,
             "enabled": enabled,
+            "_runtime_profile": dict(old_entry["config_entry"].get("_runtime_profile", {})),
         }
+        if target_type:
+            config_entry["target_type"] = target_type
+        if tray_aware:
+            config_entry["tray_aware"] = True
+        if multi_window:
+            config_entry["multi_window"] = True
+        if name:
+            config_entry["name"] = name
         if exe_name:
             config_entry["exe_name"] = exe_name
         if title_keyword:
             config_entry["title_keyword"] = title_keyword
 
-        controller = create_builtin_controller(app_id, config_entry)
+        controller = create_builtin_controller(app_id, config_entry, persist_callback=self._save_config)
         new_entry = {
             "id": entry_id,
             "hotkey": hotkey,
@@ -1207,9 +1621,17 @@ class HotkeyManager:
         self._save_config()
         return True
 
+    def set_launch_if_not_running(self, entry_id: int, enabled: bool) -> bool:
+        entry = self.entry_map.get(entry_id)
+        if not entry:
+            return False
+        entry["config_entry"]["launch_if_not_running"] = bool(enabled)
+        controller = entry.get("controller")
+        if controller and hasattr(controller, "launch_if_not_running"):
+            controller.launch_if_not_running = bool(enabled)
+        self._save_config()
+        return True
+
     def _save_config(self):
         self.config["entries"] = [e["config_entry"] for e in self.entries]
-        config_path = get_base_dir() / CONFIG_FILE_NAME
-        tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(self.config, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp_path, config_path)
+        config_store.save_hotkey_config(self.config)

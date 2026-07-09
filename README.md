@@ -2,20 +2,21 @@
 
 BindX 是一个把 Hot Key（全局热键管理）和 Mouse（按键映射）统一到单进程、单托盘、单 UI 里的桌面工具。
 
-当前项目保留两个子项目的独立运行能力，但日常主入口已经收敛为 BindX。
+当前项目只有一个主入口。`app_hotkey_manager` 和 `mouse_click` 现在只是内联业务模块，不再单独提供 GUI、启动脚本或独立配置文件。
 
 ## 项目结构
 
 ```text
 BindX/
-├── app_hotkey_manager/   Hot Key 子项目（保留独立运行能力）
-├── mouse_click/          Mouse 子项目（保留独立运行能力）
+├── app_hotkey_manager/   Hot Key 业务模块
+├── mouse_click/          Mouse 业务模块
 ├── app.py                BindX 主入口
 ├── gui.py                主界面（customtkinter）
 ├── controller.py         引擎生命周期与 UI 状态管理
+├── config_store.py       统一 JSON 配置读写与迁移
 ├── tray.py               BindX 托盘实现
 ├── trigger_engine.py     统一低层 Keyboard / Mouse Hook
-├── config_proxy.py       子项目模块加载代理
+├── config_proxy.py       子模块逻辑加载代理
 ├── shortcut_manager.py   桌面 / 开始菜单快捷方式创建
 ├── startup_manager.py    开机启动管理（HKCU\Run）
 ├── assets/               图标等资源
@@ -89,7 +90,7 @@ BindX 使用左侧导航，包含三个页面：
 - 查看热键条目
 - 新增 / 编辑 / 删除条目
 - 双击切换启用状态
-- 双击切换“启动未运行”
+- 双击切换“热键启动”
 - 右键菜单操作
 
 ### 鼠标映射页
