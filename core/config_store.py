@@ -7,9 +7,11 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parent
-CONFIG_FILE = ROOT_DIR / "bindx_config.json"
-LEGACY_HOTKEY_FILE = ROOT_DIR / "app_hotkey_manager" / "app_hotkey_config.json"
-LEGACY_MOUSE_FILE = ROOT_DIR / "mouse_click" / "config.json"
+PROJECT_DIR = ROOT_DIR.parent
+DATA_DIR = PROJECT_DIR / "data"
+CONFIG_FILE = DATA_DIR / "bindx_config.json"
+LEGACY_HOTKEY_FILE = PROJECT_DIR / "hotkeys" / "app_hotkey_config.json"
+LEGACY_MOUSE_FILE = PROJECT_DIR / "remap" / "config.json"
 
 DEFAULT_APP_STATE = {
     "hotkey_running": True,
@@ -59,6 +61,7 @@ def _read_json(path: Path):
 
 
 def _write_json(path: Path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp_path, path)
@@ -165,11 +168,33 @@ def _migrate_legacy_config():
     return migrated, should_write
 
 
+def _merge_legacy_sections(root_config):
+    merged = _normalize_root_config(root_config)
+    changed = False
+
+    legacy_hotkey = _normalize_hotkey_config(_read_json(LEGACY_HOTKEY_FILE))
+    if not merged["hotkeys"].get("entries") and legacy_hotkey.get("entries"):
+        merged["hotkeys"] = legacy_hotkey
+        changed = True
+
+    legacy_mouse = _normalize_mouse_config(_read_json(LEGACY_MOUSE_FILE))
+    merged_mouse = merged["mouse"]
+    if (
+        not merged_mouse.get("mappings")
+        and not merged_mouse.get("mouse_mappings")
+        and (legacy_mouse.get("mappings") or legacy_mouse.get("mouse_mappings"))
+    ):
+        merged["mouse"] = legacy_mouse
+        changed = True
+
+    return merged, changed
+
+
 def load_root_config():
     raw = _read_json(CONFIG_FILE)
     if _looks_like_centralized_config(raw):
-        normalized = _normalize_root_config(raw)
-        if raw != normalized:
+        normalized, merged_legacy = _merge_legacy_sections(raw)
+        if raw != normalized or merged_legacy:
             _write_json(CONFIG_FILE, normalized)
         return normalized
 

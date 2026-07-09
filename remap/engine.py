@@ -1,11 +1,17 @@
 # -*- coding: utf-8 -*-
 
+import sys
 import threading
 import time
+from pathlib import Path
 
 DEFAULT_CONFIG = {"mappings": [], "mouse_mappings": []}
 
-import config_store
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from core import config_store
 
 
 def load_config():

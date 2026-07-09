@@ -2,7 +2,7 @@
 
 """BindX 系统托盘图标。
 
-仿照 app_hotkey_manager/gui.py 与 mouse_click/gui.py 的纯 ctypes 托盘实现，但合并为单个
+仿照 hotkeys/gui.py 与 remap/gui.py 的纯 ctypes 托盘实现，但合并为单个
 BindX 图标。直接复用 hotkey_manager 模块中已加载并正确配置 argtypes 的 user32 /
 kernel32 / shell32 / gdi32 及 WNDCLASS / NOTIFYICONDATAW 结构，避免重复定义导致
 argtypes 互覆盖。
@@ -16,7 +16,7 @@ import ctypes
 import queue
 from ctypes import wintypes
 
-import config_proxy
+from . import config_proxy
 
 _hk = config_proxy.hk_module()
 user32 = _hk.user32

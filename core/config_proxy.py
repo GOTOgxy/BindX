@@ -4,17 +4,17 @@
 
 两个内联模块现在只向 BindX 提供逻辑与业务处理：
 
-  - mouse_click/engine.py -> sys.modules["engine"]
-  - app_hotkey_manager/hotkey_manager.py -> sys.modules["hotkey_manager"]
+  - remap/engine.py -> sys.modules["engine"]
+  - hotkeys/hotkey_manager.py -> sys.modules["hotkey_manager"]
 """
 
 import importlib.util
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-HOT_KEY_DIR = ROOT / "app_hotkey_manager"
-MOUSE_CLICK_DIR = ROOT / "mouse_click"
+ROOT = Path(__file__).resolve().parent.parent
+HOT_KEY_DIR = ROOT / "hotkeys"
+REMAP_DIR = ROOT / "remap"
 
 _initialized = False
 
@@ -34,11 +34,11 @@ def init_subprojects():
     if _initialized:
         return
     if not HOT_KEY_DIR.is_dir():
-        raise FileNotFoundError(f"未找到 app_hotkey_manager 子项目目录：{HOT_KEY_DIR}")
-    if not MOUSE_CLICK_DIR.is_dir():
-        raise FileNotFoundError(f"未找到 mouse_click 子项目目录：{MOUSE_CLICK_DIR}")
+        raise FileNotFoundError(f"未找到 hotkeys 子项目目录：{HOT_KEY_DIR}")
+    if not REMAP_DIR.is_dir():
+        raise FileNotFoundError(f"未找到 remap 子项目目录：{REMAP_DIR}")
 
-    _load_module("engine", MOUSE_CLICK_DIR / "engine.py")
+    _load_module("engine", REMAP_DIR / "engine.py")
     _load_module("hotkey_manager", HOT_KEY_DIR / "hotkey_manager.py")
     _initialized = True
 

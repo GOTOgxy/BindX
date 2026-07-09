@@ -18,20 +18,17 @@
         "install_path": "",
         "enabled": true,
         "_runtime_profile": {
-          "show_behavior": "activate_window",
-          "hide_behavior": "tray"
+          "hide_behavior": "tray",
+          "show_behavior": "activate_window"
         }
       },
       {
         "app": "zotero",
         "hotkey": "CTRL+ALT+Z",
-        "launch_if_not_running": true,
+        "launch_if_not_running": false,
         "install_path": "C:\\Program Files\\Zotero\\zotero.exe",
         "enabled": true,
-        "_runtime_profile": {
-          "show_behavior": "activate_window",
-          "hide_behavior": "minimize"
-        }
+        "_runtime_profile": {}
       },
       {
         "app": "termius",
@@ -39,10 +36,7 @@
         "launch_if_not_running": true,
         "install_path": "",
         "enabled": true,
-        "_runtime_profile": {
-          "show_behavior": "simple_activate",
-          "hide_behavior": "simple_minimize"
-        }
+        "_runtime_profile": {}
       },
       {
         "app": "hot_key_manager",
@@ -64,13 +58,10 @@
         "hotkey": "ALT + CTRL + G",
         "launch_if_not_running": false,
         "install_path": "",
-        "enabled": true,
+        "enabled": false,
         "exe_name": "msedge.exe",
         "title_keyword": "Google Gemini",
-        "_runtime_profile": {
-          "show_behavior": "activate_window",
-          "hide_behavior": "minimize"
-        }
+        "_runtime_profile": {}
       },
       {
         "app": "generic",
@@ -79,8 +70,8 @@
         "install_path": "C:/Users/gxy/AppData/Local/Programs/QianwenApp/qianwen.exe",
         "enabled": true,
         "_runtime_profile": {
-          "show_behavior": "relaunch_existing_instance",
-          "hide_behavior": "minimize"
+          "hide_behavior": "minimize",
+          "show_behavior": "relaunch_existing_instance"
         }
       }
     ]

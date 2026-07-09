@@ -7,9 +7,11 @@ from ctypes import wintypes
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+PACKAGE_DIR = Path(__file__).resolve().parent
+ROOT = PACKAGE_DIR.parent
+DATA_DIR = ROOT / "data"
 BAT_PATH = ROOT / "BindX.bat"
-ICON_PATH = ROOT / "assets" / "bindx_shortcut.ico"
+ICON_PATH = DATA_DIR / "assets" / "bindx_shortcut.ico"
 DESCRIPTION = "BindX"
 
 CSIDL_DESKTOPDIRECTORY = 0x0010

@@ -23,11 +23,11 @@ def main():
 
     atexit.register(kernel32.CloseHandle, mutex)
 
-    import config_proxy
+    from core import config_proxy
     config_proxy.init_subprojects()
 
-    from controller import BindXController
-    from gui import BindXApp
+    from core.controller import BindXController
+    from core.gui import BindXApp
 
     controller = BindXController()
     app = BindXApp(controller)

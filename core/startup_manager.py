@@ -8,7 +8,7 @@ import winreg
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 VALUE_NAME = "BindX"
 ROOT = Path(__file__).resolve().parent
-APP_SCRIPT = ROOT / "app.py"
+APP_SCRIPT = ROOT.parent / "app.py"
 LEGACY_STARTUP_DIR = Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 LEGACY_TARGETS = (
     LEGACY_STARTUP_DIR / "BindX.lnk",

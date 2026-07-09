@@ -6,10 +6,8 @@ HotKeyManager 仍负责热键配置 CRUD 和 AppController 动作；TriggerEngin
 WH_KEYBOARD_LL / WH_MOUSE_LL 低层 hook、触发匹配与 hook 自恢复。
 """
 
-import config_proxy
-import config_store
-import startup_manager
-from trigger_engine import TriggerEngine
+from . import config_proxy, config_store, startup_manager
+from .trigger_engine import TriggerEngine
 
 
 class BindXController:

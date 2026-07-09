@@ -7,7 +7,7 @@ from ctypes import wintypes
 
 import keyboard as kb
 
-import config_proxy
+from . import config_proxy
 
 _hk = config_proxy.hk_module()
 

@@ -20,9 +20,8 @@ from tkinter import ttk, messagebox, filedialog
 
 import customtkinter as ctk
 
-import config_proxy
-import shortcut_manager
-from tray import TrayIcon
+from . import config_proxy, shortcut_manager
+from .tray import TrayIcon
 
 _hk_logic = config_proxy.hk_module()
 
