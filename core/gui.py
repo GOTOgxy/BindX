@@ -68,6 +68,25 @@ def menu_font(widget):
     return ("Microsoft YaHei UI", scaled(widget, size))
 
 
+def _force_toplevel_foreground(window):
+    try:
+        hwnd = int(window.winfo_id())
+    except (tk.TclError, ValueError):
+        return False
+    if not hwnd:
+        return False
+    try:
+        window.lift()
+        window.attributes("-topmost", True)
+        window.update_idletasks()
+        ok = bool(_hk_logic.force_foreground_window(hwnd))
+        window.attributes("-topmost", False)
+        window.focus_force()
+        return ok
+    except tk.TclError:
+        return False
+
+
 FONT_PRESET_TABLE_SIZE = {
     "紧凑": 16,
     "稍小": 19,
@@ -2224,6 +2243,10 @@ class BindXApp(ctk.CTk):
 
     def _show_window(self):
         self.deiconify()
+        try:
+            self.state("normal")
+        except tk.TclError:
+            pass
         if self.controller.app_state.get("window_zoomed"):
             try:
                 self.state("zoomed")
@@ -2231,8 +2254,8 @@ class BindXApp(ctk.CTk):
                 pass
         self.overview_tab.refresh_shortcut_buttons()
         self.overview_tab.refresh_status()
-        self.lift()
-        self.focus_force()
+        if not _force_toplevel_foreground(self):
+            self.after(40, lambda: _force_toplevel_foreground(self))
 
     def toggle_ui(self):
         if self.state() == "withdrawn" or self.state() == "iconic":
