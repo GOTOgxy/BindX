@@ -52,6 +52,7 @@ class TriggerEngine:
     ALT_KEYS = {VK_MENU, VK_LMENU, VK_RMENU}
     WIN_KEYS = {VK_LWIN, VK_RWIN}
     MODIFIER_KEYS = CTRL_KEYS | SHIFT_KEYS | ALT_KEYS | WIN_KEYS
+    MODIFIER_GROUPS = (CTRL_KEYS, SHIFT_KEYS, ALT_KEYS, WIN_KEYS)
 
     BUTTON_MAP = {
         "left": (WM_LBUTTONDOWN, WM_LBUTTONUP),
@@ -242,6 +243,8 @@ class TriggerEngine:
         user32.TranslateMessage.restype = wintypes.BOOL
         user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
         user32.DispatchMessageW.restype = wintypes.LPARAM
+        user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        user32.GetAsyncKeyState.restype = ctypes.c_short
         kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
         kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 
@@ -292,6 +295,7 @@ class TriggerEngine:
         is_up = w_param in (self.WM_KEYUP, self.WM_SYSKEYUP)
 
         if is_down:
+            self._sync_modifier_state(exclude_vk=vk)
             was_pressed = vk in self._pressed_vks
             self._pressed_vks.add(vk)
             if was_pressed:
@@ -306,6 +310,7 @@ class TriggerEngine:
                     self._suppressed_keyups.update(self._pressed_vks & self.MODIFIER_KEYS)
                     return 1
         elif is_up:
+            self._sync_modifier_state(exclude_vk=vk)
             self._pressed_vks.discard(vk)
             self._release_active_triggers(vk)
             if vk in self.MODIFIER_KEYS:
@@ -323,6 +328,25 @@ class TriggerEngine:
         self._active_key_mapping_times.clear()
         self._suppressed_keyups.clear()
         self._pressed_vks = {vk for vk in self._pressed_vks if vk in self.MODIFIER_KEYS}
+        self._sync_modifier_state()
+
+    def _sync_modifier_state(self, exclude_vk=None):
+        user32 = self._user32
+        if user32 is None:
+            return
+        live_modifiers = set()
+        for group in self.MODIFIER_GROUPS:
+            if exclude_vk in group:
+                live_modifiers.update(vk for vk in self._pressed_vks if vk in group)
+                continue
+            for candidate in group:
+                try:
+                    if user32.GetAsyncKeyState(candidate) & 0x8000:
+                        live_modifiers.add(candidate)
+                except Exception:
+                    break
+        self._pressed_vks = {vk for vk in self._pressed_vks if vk not in self.MODIFIER_KEYS}
+        self._pressed_vks.update(live_modifiers)
 
     def _mouse_proc(self, n_code, w_param, l_param):
         if n_code < 0 or not self.mouse_enabled:
