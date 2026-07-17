@@ -758,7 +758,7 @@ class EntryDialog(_BindXDialog):
                 "app": "web_app",
                 "name": self.name_var.get().strip(),
                 "target_type": target_type,
-                "tray_aware": False,
+                "tray_aware": self.tray_var.get(),
                 "multi_window": self.multi_window_var.get(),
                 "hotkey": hotkey,
                 "enabled": self.enabled_var.get(),

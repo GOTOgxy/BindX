@@ -2,7 +2,7 @@
   "app": {
     "hotkey_running": true,
     "mouse_running": false,
-    "window_size": "946x582",
+    "window_size": "946x583",
     "window_zoomed": false,
     "font_preset": "常规",
     "autostart_enabled": true
@@ -16,10 +16,10 @@
         "hotkey": "CTRL+ALT+Q",
         "launch_if_not_running": false,
         "install_path": "",
-        "enabled": true,
+        "enabled": false,
         "_runtime_profile": {
-          "show_behavior": "activate_window",
-          "hide_behavior": "tray"
+          "hide_behavior": "tray",
+          "show_behavior": "activate_window"
         }
       },
       {
@@ -29,8 +29,8 @@
         "install_path": "C:\\Program Files\\Zotero\\zotero.exe",
         "enabled": true,
         "_runtime_profile": {
-          "show_behavior": "activate_window",
-          "hide_behavior": "minimize"
+          "hide_behavior": "minimize",
+          "show_behavior": "activate_window"
         }
       },
       {
@@ -40,8 +40,8 @@
         "install_path": "",
         "enabled": true,
         "_runtime_profile": {
-          "show_behavior": "simple_activate",
-          "hide_behavior": "simple_minimize"
+          "hide_behavior": "simple_minimize_taskbar_hidden",
+          "show_behavior": "simple_activate"
         }
       },
       {
@@ -53,21 +53,31 @@
       },
       {
         "app": "generic",
-        "hotkey": "CTRL+ALT+K",
-        "launch_if_not_running": false,
+        "hotkey": "CTRL+ALT+Q",
+        "launch_if_not_running": true,
         "install_path": "C:/Program Files (x86)/Tencent/QQMusic/QQMusic.exe",
-        "enabled": false,
-        "_runtime_profile": {}
+        "enabled": true,
+        "tray_aware": true,
+        "_runtime_profile": {
+          "hide_behavior": "tray",
+          "show_behavior": "relaunch_existing_instance"
+        },
+        "target_type": "win32",
+        "exe_name": "QQMusic.exe"
       },
       {
         "app": "web_app",
-        "hotkey": "ALT + CTRL + G",
+        "hotkey": "CTRL+ALT+G",
         "launch_if_not_running": false,
         "install_path": "",
-        "enabled": false,
+        "enabled": true,
+        "_runtime_profile": {
+          "hide_behavior": "minimize",
+          "show_behavior": "activate_window"
+        },
+        "target_type": "browser_tab",
         "exe_name": "msedge.exe",
-        "title_keyword": "Google Gemini",
-        "_runtime_profile": {}
+        "title_keyword": "Google Gemini"
       },
       {
         "app": "generic",
@@ -75,9 +85,10 @@
         "launch_if_not_running": false,
         "install_path": "C:/Users/gxy/AppData/Local/Programs/QianwenApp/qianwen.exe",
         "enabled": true,
+        "tray_aware": true,
         "_runtime_profile": {
-          "show_behavior": "relaunch_existing_instance",
-          "hide_behavior": "minimize"
+          "hide_behavior": "tray",
+          "show_behavior": "relaunch_existing_instance"
         }
       }
     ]

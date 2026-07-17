@@ -839,9 +839,13 @@ class AppController:
         if not hwnd:
             return False
         if self.simple_window_control:
+            if self.hide_from_taskbar:
+                self._hide_from_taskbar(hwnd)
             user32.ShowWindow(hwnd, SW_MINIMIZE)
             self._mark_action("hide", hwnd)
-            self._record_behavior(hide_behavior="simple_minimize")
+            self._record_behavior(
+                hide_behavior="simple_minimize_taskbar_hidden" if self.hide_from_taskbar else "simple_minimize"
+            )
             return True
         if self.hide_mode == "tray":
             ok = self._hide_to_tray(hwnd)
@@ -1196,7 +1200,7 @@ def create_builtin_controller(app_id: str, entry: dict, persist_callback=None) -
             primary_window_classes={"Chrome_WidgetWin_1"},
             ignored_window_classes=set(),
             hide_mode="minimize",
-            hide_from_taskbar=False,
+            hide_from_taskbar=True,
             launch_if_not_running=bool(entry.get("launch_if_not_running", True)),
             install_path=install_path,
             launch_candidates=[
@@ -1217,6 +1221,7 @@ def create_builtin_controller(app_id: str, entry: dict, persist_callback=None) -
             exe_name = Path(install_path).name
         display_name = entry.get("name", "")
         title_keyword = entry.get("title_keyword", "")
+        tray_aware = bool(entry.get("tray_aware", False))
         if not exe_name and not title_keyword and not display_name:
             raise ValueError("generic 类型必须提供 name、title_keyword、exe_name 或 install_path")
         return AppController(
@@ -1232,8 +1237,8 @@ def create_builtin_controller(app_id: str, entry: dict, persist_callback=None) -
                 "Base_PowerMessageWindow",
                 "crashpad_SessionEndWatcher",
             },
-            hide_mode="minimize",
-            hide_from_taskbar=True,
+            hide_mode="tray" if tray_aware else "minimize",
+            hide_from_taskbar=False,
             launch_if_not_running=bool(entry.get("launch_if_not_running", False) and install_path),
             install_path=install_path,
             title_keyword=title_keyword,
@@ -1250,14 +1255,15 @@ def create_builtin_controller(app_id: str, entry: dict, persist_callback=None) -
         title_keyword = entry.get("title_keyword", "")
         if not title_keyword:
             raise ValueError("web_app 类型必须提供 title_keyword")
+        tray_aware = bool(entry.get("tray_aware", False))
         return AppController(
             app_id=app_id,
             exe_name=exe_name,
             behavior_kind="browser_title",
             primary_window_classes=set(),
             ignored_window_classes={"IME", "MSCTFIME UI", "GDI+ Hook Window Class"},
-            hide_mode="minimize",
-            hide_from_taskbar=True,
+            hide_mode="tray" if tray_aware else "minimize",
+            hide_from_taskbar=False,
             launch_if_not_running=False,
             install_path=None,
             title_keyword=title_keyword,

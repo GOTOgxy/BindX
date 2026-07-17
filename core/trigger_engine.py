@@ -303,7 +303,6 @@ class TriggerEngine:
             if self.keyboard_enabled:
                 if self._match_hotkey(vk):
                     self._suppressed_keyups.add(vk)
-                    self._suppressed_keyups.update(self._pressed_vks & self.MODIFIER_KEYS)
                     return 1
                 if self._match_key_mapping(vk):
                     self._suppressed_keyups.add(vk)
@@ -439,8 +438,25 @@ class TriggerEngine:
             self._active_key_mapping_times[idx] = time.monotonic()
             self.last_event = f"Key {'+'.join(mapping.get('trigger', []))} -> {'+'.join(mapping.get('output', []))}"
             threading.Thread(target=self._do_output, args=(mapping.get("output", []),), daemon=True).start()
+            self._release_pressed_modifiers()
             return True
         return False
+
+    def _release_pressed_modifiers(self):
+        pressed = []
+        if self._pressed_vks & self.CTRL_KEYS:
+            pressed.append("ctrl")
+        if self._pressed_vks & self.SHIFT_KEYS:
+            pressed.append("shift")
+        if self._pressed_vks & self.ALT_KEYS:
+            pressed.append("alt")
+        if self._pressed_vks & self.WIN_KEYS:
+            pressed.append("windows")
+        for key in reversed(pressed):
+            try:
+                kb.release(key)
+            except Exception:
+                pass
 
     def _release_active_triggers(self, vk):
         for entry in self.hotkey_manager.entries:
