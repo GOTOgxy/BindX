@@ -29,6 +29,8 @@ class TriggerEngine:
     WM_RBUTTONUP = 0x0205
     WM_MBUTTONDOWN = 0x0207
     WM_MBUTTONUP = 0x0208
+    WM_MOUSEWHEEL = 0x020A
+    WM_MOUSEHWHEEL = 0x020E
     WM_XBUTTONDOWN = 0x020B
     WM_XBUTTONUP = 0x020C
 
@@ -53,6 +55,16 @@ class TriggerEngine:
     WIN_KEYS = {VK_LWIN, VK_RWIN}
     MODIFIER_KEYS = CTRL_KEYS | SHIFT_KEYS | ALT_KEYS | WIN_KEYS
     MODIFIER_GROUPS = (CTRL_KEYS, SHIFT_KEYS, ALT_KEYS, WIN_KEYS)
+    MODIFIER_KEY_NAMES = {
+        VK_LSHIFT: "left shift",
+        VK_RSHIFT: "right shift",
+        VK_LCONTROL: "left ctrl",
+        VK_RCONTROL: "right ctrl",
+        VK_LMENU: "left alt",
+        VK_RMENU: "right alt",
+        VK_LWIN: "left windows",
+        VK_RWIN: "right windows",
+    }
 
     BUTTON_MAP = {
         "left": (WM_LBUTTONDOWN, WM_LBUTTONUP),
@@ -124,6 +136,7 @@ class TriggerEngine:
         self._hotkey_queue = []
 
         self._pressed_vks = set()
+        self._physical_modifiers = set()
         self._active_hotkeys = set()
         self._active_key_mappings = set()
         self._active_hotkey_times = {}
@@ -187,6 +200,7 @@ class TriggerEngine:
             self._thread = None
             self.running = False
             self._pressed_vks.clear()
+            self._physical_modifiers.clear()
             self._active_hotkeys.clear()
             self._active_key_mappings.clear()
             self._active_hotkey_times.clear()
@@ -266,6 +280,10 @@ class TriggerEngine:
 
         self.running = True
         self.last_error = None
+        self._physical_modifiers = {
+            vk for vk in self.MODIFIER_KEYS
+            if user32.GetAsyncKeyState(vk) & 0x8000
+        }
         self._sync_hotkey_status()
         msg = wintypes.MSG()
 
@@ -295,6 +313,8 @@ class TriggerEngine:
         is_up = w_param in (self.WM_KEYUP, self.WM_SYSKEYUP)
 
         if is_down:
+            if vk in self.MODIFIER_KEYS:
+                self._physical_modifiers.add(vk)
             self._sync_modifier_state(exclude_vk=vk)
             was_pressed = vk in self._pressed_vks
             self._pressed_vks.add(vk)
@@ -306,9 +326,10 @@ class TriggerEngine:
                     return 1
                 if self._match_key_mapping(vk):
                     self._suppressed_keyups.add(vk)
-                    self._suppressed_keyups.update(self._pressed_vks & self.MODIFIER_KEYS)
                     return 1
         elif is_up:
+            if vk in self.MODIFIER_KEYS:
+                self._physical_modifiers.discard(vk)
             self._sync_modifier_state(exclude_vk=vk)
             self._pressed_vks.discard(vk)
             self._release_active_triggers(vk)
@@ -333,10 +354,12 @@ class TriggerEngine:
         user32 = self._user32
         if user32 is None:
             return
-        live_modifiers = set()
+        # 物理按键事件是最可靠的状态来源；GetAsyncKeyState 会被注入的
+        # 按键事件污染（例如输出注入的 key-up 会让它误报修饰键已松开），
+        # 因此只把它作为物理跟踪之外的补充（覆盖引擎启动前已按住的键）。
+        live_modifiers = set(self._physical_modifiers)
         for group in self.MODIFIER_GROUPS:
             if exclude_vk in group:
-                live_modifiers.update(vk for vk in self._pressed_vks if vk in group)
                 continue
             for candidate in group:
                 try:
@@ -349,6 +372,10 @@ class TriggerEngine:
 
     def _mouse_proc(self, n_code, w_param, l_param):
         if n_code < 0 or not self.mouse_enabled:
+            return self._call_next_mouse(n_code, w_param, l_param)
+
+        if w_param in (self.WM_MOUSEWHEEL, self.WM_MOUSEHWHEEL):
+            self._clear_stale_modifier_state()
             return self._call_next_mouse(n_code, w_param, l_param)
 
         info = ctypes.cast(l_param, ctypes.POINTER(self.MSLLHOOKSTRUCT)).contents
@@ -438,25 +465,28 @@ class TriggerEngine:
             self._active_key_mapping_times[idx] = time.monotonic()
             self.last_event = f"Key {'+'.join(mapping.get('trigger', []))} -> {'+'.join(mapping.get('output', []))}"
             threading.Thread(target=self._do_output, args=(mapping.get("output", []),), daemon=True).start()
-            self._release_pressed_modifiers()
             return True
         return False
 
-    def _release_pressed_modifiers(self):
-        pressed = []
-        if self._pressed_vks & self.CTRL_KEYS:
-            pressed.append("ctrl")
-        if self._pressed_vks & self.SHIFT_KEYS:
-            pressed.append("shift")
-        if self._pressed_vks & self.ALT_KEYS:
-            pressed.append("alt")
-        if self._pressed_vks & self.WIN_KEYS:
-            pressed.append("windows")
-        for key in reversed(pressed):
+    def _held_modifier_names(self):
+        # 只依据物理按键跟踪，避免把注入事件的逻辑状态误当成用户真实按键
+        held = frozenset()
+        for _ in range(3):
             try:
-                kb.release(key)
-            except Exception:
-                pass
+                held = frozenset(self._physical_modifiers)
+                break
+            except RuntimeError:
+                continue
+        return [
+            name for vk, name in self.MODIFIER_KEY_NAMES.items()
+            if vk in held
+        ]
+
+    def _clear_stale_modifier_state(self):
+        # 只校正内部状态。绝不能在这里注入修饰键释放——用户可能正真实地
+        # 按住 Ctrl/Alt/Shift（例如 Ctrl+滚轮缩放），注入 key-up 会把这些
+        # 物理按住的键"杀死"，导致后续 Ctrl+C 之类组合退化成纯字母键。
+        self._sync_modifier_state()
 
     def _release_active_triggers(self, vk):
         for entry in self.hotkey_manager.entries:
@@ -535,8 +565,17 @@ class TriggerEngine:
         if not output:
             return
         pressed = []
+        lifted = []
         try:
             time.sleep(0.02)
+            # 用户物理按住的修饰键先临时抬起，避免污染输出组合；
+            # 输出完成后再恢复仍然按住的键，保证"按什么就是什么"。
+            for name in self._held_modifier_names():
+                try:
+                    kb.release(name)
+                    lifted.append(name)
+                except Exception:
+                    pass
             for key in output:
                 kb.press(key)
                 pressed.append(key)
@@ -548,3 +587,12 @@ class TriggerEngine:
                     kb.release(key)
                 except Exception:
                     pass
+            if lifted:
+                still_held = set(self._held_modifier_names())
+                for name in reversed(lifted):
+                    if name not in still_held:
+                        continue
+                    try:
+                        kb.press(name)
+                    except Exception:
+                        pass

@@ -5,7 +5,7 @@
     "window_size": "946x583",
     "window_zoomed": false,
     "font_preset": "常规",
-    "autostart_enabled": true
+    "autostart_enabled": false
   },
   "hotkeys": {
     "display_name": "App Hotkey Manager",
@@ -16,7 +16,7 @@
         "hotkey": "CTRL+ALT+Q",
         "launch_if_not_running": false,
         "install_path": "",
-        "enabled": false,
+        "enabled": true,
         "_runtime_profile": {
           "hide_behavior": "tray",
           "show_behavior": "activate_window"
@@ -36,7 +36,7 @@
       {
         "app": "termius",
         "hotkey": "CTRL+Q",
-        "launch_if_not_running": true,
+        "launch_if_not_running": false,
         "install_path": "",
         "enabled": true,
         "_runtime_profile": {
@@ -54,9 +54,9 @@
       {
         "app": "generic",
         "hotkey": "CTRL+ALT+Q",
-        "launch_if_not_running": true,
+        "launch_if_not_running": false,
         "install_path": "C:/Program Files (x86)/Tencent/QQMusic/QQMusic.exe",
-        "enabled": true,
+        "enabled": false,
         "tray_aware": true,
         "_runtime_profile": {
           "hide_behavior": "tray",
