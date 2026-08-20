@@ -36,6 +36,10 @@ class BindXController:
             keyboard_enabled=self.hk_running,
             mouse_enabled=self.mc_running,
         )
+        self.trigger_engine.set_output_options(
+            delay_ms=self.app_state.get("output_delay_ms", 20),
+            restore_held_modifiers=self.app_state.get("restore_held_modifiers", True),
+        )
         self._sync_autostart_state()
 
     def set_hotkey_self_callback(self, callback):
@@ -53,8 +57,8 @@ class BindXController:
                     entry["controller"].callback()
                 else:
                     entry["controller"].toggle()
-            except Exception:
-                pass
+            except Exception as error:
+                entry["last_error"] = str(error)
 
     def _save_engine_state(self):
         config_store.save_app_state(self.app_state)
@@ -70,6 +74,22 @@ class BindXController:
         if font_preset not in {"紧凑", "稍小", "常规", "特大", "超大"}:
             return
         self.app_state["font_preset"] = font_preset
+        self._save_engine_state()
+
+    def set_output_options(self, delay_ms=None, restore_held_modifiers=None):
+        if delay_ms is not None:
+            try:
+                delay_ms = int(delay_ms)
+            except (TypeError, ValueError):
+                delay_ms = 20
+            delay_ms = max(0, min(delay_ms, 500))
+            self.app_state["output_delay_ms"] = delay_ms
+        if restore_held_modifiers is not None:
+            self.app_state["restore_held_modifiers"] = bool(restore_held_modifiers)
+        self.trigger_engine.set_output_options(
+            delay_ms=self.app_state.get("output_delay_ms", 20),
+            restore_held_modifiers=self.app_state.get("restore_held_modifiers", True),
+        )
         self._save_engine_state()
 
     def _sync_autostart_state(self):
@@ -120,6 +140,24 @@ class BindXController:
 
     def reload_hotkey_config(self):
         self.hk_config = self._load_hotkey_config()
+
+    def reload_all_config(self):
+        self_cb = None
+        for entry in self.hotkey_manager.entries:
+            if entry.get("config_entry", {}).get("app") == "hot_key_manager":
+                ctrl = entry.get("controller")
+                if ctrl is not None and hasattr(ctrl, "callback"):
+                    self_cb = ctrl.callback
+                break
+        self.hk_config = self._load_hotkey_config()
+        self.hotkey_manager = self._HotkeyManager(self.hk_config)
+        self.hotkey_manager.external_trigger_mode = True
+        self.hotkey_manager.external_trigger_active = self.hk_running
+        if self_cb is not None:
+            self.hotkey_manager.set_self_callback(self_cb)
+        self.trigger_engine.hotkey_manager = self.hotkey_manager
+        self.mc_config = self._load_mouse_config()
+        self.trigger_engine.update_mouse_config(self.mc_config)
 
     def start_mouse(self, persist=True):
         if self.trigger_engine is None:

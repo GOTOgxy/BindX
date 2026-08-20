@@ -3,6 +3,7 @@
 import ctypes
 import threading
 import time
+from collections import deque
 from ctypes import wintypes
 
 import keyboard as kb
@@ -117,6 +118,26 @@ class TriggerEngine:
         "backspace": 0x08,
         "caps lock": 0x14,
         "capslock": 0x14,
+        "num0": 0x60,
+        "num1": 0x61,
+        "num2": 0x62,
+        "num3": 0x63,
+        "num4": 0x64,
+        "num5": 0x65,
+        "num6": 0x66,
+        "num7": 0x67,
+        "num8": 0x68,
+        "num9": 0x69,
+        "numpad0": 0x60,
+        "numpad1": 0x61,
+        "numpad2": 0x62,
+        "numpad3": 0x63,
+        "numpad4": 0x64,
+        "numpad5": 0x65,
+        "numpad6": 0x66,
+        "numpad7": 0x67,
+        "numpad8": 0x68,
+        "numpad9": 0x69,
     }
 
     class KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -166,6 +187,21 @@ class TriggerEngine:
         self._suppressed_mouse_buttons = set()
         self._user32 = None
 
+        # A3: 输出延迟与是否恢复物理按住的修饰键
+        self._output_delay_ms = 20
+        self._restore_held_modifiers = True
+        # A1: 线程停止时的按键状态快照，下次启动恢复
+        self._snap_pressed = None
+        self._snap_suppressed = None
+        # A4: 输出队列与 worker 线程（串行化输出）
+        self._output_queue = []
+        self._output_worker = None
+        # 钩子回调延迟统计
+        self._slow_hook_count = 0
+        # B5: 注入事件日志（供按键检查器标注 BindX 注入）
+        self._injection_log = deque(maxlen=128)
+        self._injection_log_lock = threading.Lock()
+
     def set_enabled(self, keyboard_enabled=None, mouse_enabled=None):
         with self._lock:
             if keyboard_enabled is not None:
@@ -181,6 +217,17 @@ class TriggerEngine:
     def update_mouse_config(self, config):
         with self._lock:
             self.mouse_config = config
+
+    def set_output_options(self, delay_ms=None, restore_held_modifiers=None):
+        with self._lock:
+            if delay_ms is not None:
+                try:
+                    delay_ms = int(delay_ms)
+                except (TypeError, ValueError):
+                    delay_ms = 20
+                self._output_delay_ms = max(0, delay_ms)
+            if restore_held_modifiers is not None:
+                self._restore_held_modifiers = bool(restore_held_modifiers)
 
     def pop_hotkey_events(self):
         with self._queue_lock:
@@ -220,6 +267,9 @@ class TriggerEngine:
         if not thread or not thread.is_alive():
             self._thread = None
             self.running = False
+            # A1: 快照当前按键状态，钩子重装后恢复
+            self._snap_pressed = set(self._pressed_vks)
+            self._snap_suppressed = set(self._suppressed_keyups)
             self._pressed_vks.clear()
             self._physical_modifiers.clear()
             self._active_hotkeys.clear()
@@ -301,11 +351,28 @@ class TriggerEngine:
 
         self.running = True
         self.last_error = None
+        self._slow_hook_count = 0
         self._physical_modifiers = {
             vk for vk in self.MODIFIER_KEYS
             if user32.GetAsyncKeyState(vk) & 0x8000
         }
+        # A1: 恢复上次停止前的按键状态快照，过滤已不再物理按住的键
+        snap_pressed = self._snap_pressed
+        snap_suppressed = self._snap_suppressed
+        self._snap_pressed = None
+        self._snap_suppressed = None
+        if snap_pressed is not None:
+            snap_suppressed = snap_suppressed or set()
+            self._pressed_vks = {
+                vk for vk in snap_pressed if user32.GetAsyncKeyState(vk) & 0x8000
+            } | self._physical_modifiers
+            self._suppressed_keyups = {
+                vk for vk in snap_suppressed if vk in self._pressed_vks
+            }
         self._sync_hotkey_status()
+        # A4: 启动输出队列 worker 线程
+        self._output_worker = threading.Thread(target=self._output_worker_loop, daemon=True)
+        self._output_worker.start()
         msg = wintypes.MSG()
 
         try:
@@ -319,9 +386,54 @@ class TriggerEngine:
             user32.UnhookWindowsHookEx(keyboard_hook)
             user32.UnhookWindowsHookEx(mouse_hook)
             self.running = False
+            # A4: 排空输出队列并等待 worker 退出
+            with self._queue_lock:
+                self._output_queue.clear()
+            worker = self._output_worker
+            self._output_worker = None
+            if worker is not None and worker is not threading.current_thread():
+                worker.join(timeout=1.0)
             self._sync_hotkey_status()
 
+    def _output_worker_loop(self):
+        while True:
+            if self._stop_event.is_set():
+                break
+            keys = None
+            with self._queue_lock:
+                if self._output_queue:
+                    keys = self._output_queue.pop(0)
+            if keys is None:
+                time.sleep(0.005)
+                continue
+            try:
+                self._do_output(keys)
+            except Exception:
+                pass
+        # 退出前排空残余输出
+        with self._queue_lock:
+            remaining = list(self._output_queue)
+            self._output_queue.clear()
+        for keys in remaining:
+            try:
+                self._do_output(keys)
+            except Exception:
+                pass
+
+    def _note_hook_latency(self, started):
+        if time.monotonic() - started > 0.1:
+            self._slow_hook_count += 1
+            if self._slow_hook_count == 1:
+                self.last_error = "Hook callback is slow (over 100ms); input may feel laggy"
+
     def _keyboard_proc(self, n_code, w_param, l_param):
+        started = time.monotonic()
+        try:
+            return self._keyboard_proc_impl(n_code, w_param, l_param)
+        finally:
+            self._note_hook_latency(started)
+
+    def _keyboard_proc_impl(self, n_code, w_param, l_param):
         if n_code < 0:
             return self._call_next_keyboard(n_code, w_param, l_param)
 
@@ -367,7 +479,9 @@ class TriggerEngine:
         self._active_key_mappings.clear()
         self._active_hotkey_times.clear()
         self._active_key_mapping_times.clear()
-        self._suppressed_keyups.clear()
+        # A2: 保留仍按住的键的抑制记录，避免组合状态清除后
+        # 被抑制键的物理 key-up 穿透
+        self._suppressed_keyups = {vk for vk in self._suppressed_keyups if vk in self._pressed_vks}
         self._pressed_vks = {vk for vk in self._pressed_vks if vk in self.MODIFIER_KEYS}
         self._sync_modifier_state()
 
@@ -392,6 +506,13 @@ class TriggerEngine:
         self._pressed_vks.update(live_modifiers)
 
     def _mouse_proc(self, n_code, w_param, l_param):
+        started = time.monotonic()
+        try:
+            return self._mouse_proc_impl(n_code, w_param, l_param)
+        finally:
+            self._note_hook_latency(started)
+
+    def _mouse_proc_impl(self, n_code, w_param, l_param):
         if n_code < 0 or not self.mouse_enabled:
             return self._call_next_mouse(n_code, w_param, l_param)
 
@@ -414,7 +535,8 @@ class TriggerEngine:
                         continue
                 self._suppressed_mouse_buttons.add(btn)
                 self.last_event = f"Mouse {btn} -> {'+'.join(mapping.get('output', []))}"
-                threading.Thread(target=self._do_output, args=(mapping.get("output", []),), daemon=True).start()
+                with self._queue_lock:
+                    self._output_queue.append(list(mapping.get("output", [])))
                 return 1
             if w_param == up_msg and btn in self._suppressed_mouse_buttons:
                 self._suppressed_mouse_buttons.discard(btn)
@@ -485,7 +607,8 @@ class TriggerEngine:
             self._active_key_mappings.add(idx)
             self._active_key_mapping_times[idx] = time.monotonic()
             self.last_event = f"Key {'+'.join(mapping.get('trigger', []))} -> {'+'.join(mapping.get('output', []))}"
-            threading.Thread(target=self._do_output, args=(mapping.get("output", []),), daemon=True).start()
+            with self._queue_lock:
+                self._output_queue.append(list(mapping.get("output", [])))
             return True
         return False
 
@@ -604,18 +727,20 @@ class TriggerEngine:
             if group:
                 held_mod_groups.add(group)
         try:
-            time.sleep(0.02)
+            time.sleep(self._output_delay_ms / 1000.0)
+            self._log_injection(output)
             # 用户物理按住、但不在输出组合中的修饰键先临时抬起，避免污染输出组合；
             # 输出组合里包含的修饰键保持按下（目标应用能拿到正确的修饰键状态，
             # 修复 Ctrl+C 被注入成纯字母 c 之类的问题），输出完成后再恢复多抬起的键。
-            for name in self._held_modifier_names():
-                if self._modifier_group(name) in output_mod_groups:
-                    continue
-                try:
-                    kb.release(name)
-                    lifted.append(name)
-                except Exception:
-                    pass
+            if self._restore_held_modifiers:
+                for name in self._held_modifier_names():
+                    if self._modifier_group(name) in output_mod_groups:
+                        continue
+                    try:
+                        kb.release(name)
+                        lifted.append(name)
+                    except Exception:
+                        pass
             for key in output:
                 group = self._modifier_group(key)
                 if group and group in held_mod_groups:
@@ -640,3 +765,38 @@ class TriggerEngine:
                         kb.press(name)
                     except Exception:
                         pass
+
+    def _log_injection(self, keys):
+        # 记录一次注入事件，供检查器在短窗口内匹配
+        output = self._normalize_output_keys(keys)
+        if not output:
+            return
+        names = set()
+        vks = set()
+        for name in output:
+            n = str(name).strip().lower()
+            if n:
+                names.add(n)
+            vk = self._key_name_to_vk(n)
+            if vk is not None:
+                vks.add(vk)
+        if not names and not vks:
+            return
+        with self._injection_log_lock:
+            self._injection_log.append((time.monotonic(), vks, names))
+
+    def match_injection(self, vk=None, button=None, now=None):
+        # 判断给定 vk / 鼠标按钮是否来自近期（250ms 内）的 BindX 注入
+        if now is None:
+            now = time.monotonic()
+        btn = str(button).strip().lower() if button is not None else None
+        with self._injection_log_lock:
+            log = list(self._injection_log)
+        for ts, vks, names in reversed(log):
+            if ts < now - 0.25:
+                break
+            if vk is not None and vk in vks:
+                return True
+            if btn and btn in names:
+                return True
+        return False

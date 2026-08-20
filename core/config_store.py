@@ -3,6 +3,8 @@
 import copy
 import json
 import os
+import shutil
+import sys
 from pathlib import Path
 
 
@@ -20,6 +22,8 @@ DEFAULT_APP_STATE = {
     "window_zoomed": False,
     "font_preset": "常规",
     "autostart_enabled": False,
+    "output_delay_ms": 20,
+    "restore_held_modifiers": True,
 }
 
 DEFAULT_HOTKEY_CONFIG = {
@@ -51,12 +55,21 @@ def _clone(value):
     return copy.deepcopy(value)
 
 
+LOAD_ERRORS = []
+
+
+def _record_load_error(path: Path, error: Exception):
+    LOAD_ERRORS.append(str(error))
+    print("[BindX] config read failed, existing file kept: %s: %s" % (path, error), file=sys.stderr)
+
+
 def _read_json(path: Path):
     if not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError) as error:
+        _record_load_error(path, error)
         return None
 
 
@@ -64,6 +77,11 @@ def _write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    if path.exists():
+        try:
+            shutil.copy2(path, str(path) + ".bak")
+        except OSError:
+            pass
     os.replace(tmp_path, path)
 
 
@@ -90,6 +108,16 @@ def _normalize_app_state(raw):
     state["font_preset"] = font_preset
 
     state["autostart_enabled"] = bool(raw.get("autostart_enabled", state["autostart_enabled"]))
+
+    try:
+        output_delay_ms = int(raw.get("output_delay_ms", DEFAULT_APP_STATE["output_delay_ms"]))
+    except (TypeError, ValueError):
+        output_delay_ms = DEFAULT_APP_STATE["output_delay_ms"]
+    if output_delay_ms < 0:
+        output_delay_ms = DEFAULT_APP_STATE["output_delay_ms"]
+    state["output_delay_ms"] = min(output_delay_ms, 500)
+
+    state["restore_held_modifiers"] = bool(raw.get("restore_held_modifiers", DEFAULT_APP_STATE["restore_held_modifiers"]))
     return state
 
 
