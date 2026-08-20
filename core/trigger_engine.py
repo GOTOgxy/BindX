@@ -66,6 +66,27 @@ class TriggerEngine:
         VK_RWIN: "right windows",
     }
 
+    # 修饰键组名归一化：具体名（left ctrl 等）与通用名（ctrl 等）都映射到同一个组，
+    # 用于判断"用户物理按住的修饰键"与"输出组合中的修饰键"是否属于同一组
+    _MODIFIER_GROUP_ALIASES = {
+        "ctrl": "ctrl",
+        "control": "ctrl",
+        "left ctrl": "ctrl",
+        "right ctrl": "ctrl",
+        "shift": "shift",
+        "left shift": "shift",
+        "right shift": "shift",
+        "alt": "alt",
+        "altgr": "alt",
+        "left alt": "alt",
+        "right alt": "alt",
+        "win": "win",
+        "windows": "win",
+        "cmd": "win",
+        "super": "win",
+        "left windows": "win",
+        "right windows": "win",
+    }
     BUTTON_MAP = {
         "left": (WM_LBUTTONDOWN, WM_LBUTTONUP),
         "right": (WM_RBUTTONDOWN, WM_RBUTTONUP),
@@ -560,23 +581,46 @@ class TriggerEngine:
             return []
         return [str(k).strip().lower() for k in keys if str(k).strip()]
 
+    @classmethod
+    def _modifier_group(cls, name):
+        return cls._MODIFIER_GROUP_ALIASES.get(str(name).strip().lower())
+
     def _do_output(self, keys):
         output = self._normalize_output_keys(keys)
         if not output:
             return
         pressed = []
         lifted = []
+        # 输出组合包含的修饰键组（如 ctrl/shift/alt/win）
+        output_mod_groups = set()
+        for k in output:
+            group = self._modifier_group(k)
+            if group:
+                output_mod_groups.add(group)
+        # 用户当前物理按住的修饰键组
+        held_mod_groups = set()
+        for n in self._held_modifier_names():
+            group = self._modifier_group(n)
+            if group:
+                held_mod_groups.add(group)
         try:
             time.sleep(0.02)
-            # 用户物理按住的修饰键先临时抬起，避免污染输出组合；
-            # 输出完成后再恢复仍然按住的键，保证"按什么就是什么"。
+            # 用户物理按住、但不在输出组合中的修饰键先临时抬起，避免污染输出组合；
+            # 输出组合里包含的修饰键保持按下（目标应用能拿到正确的修饰键状态，
+            # 修复 Ctrl+C 被注入成纯字母 c 之类的问题），输出完成后再恢复多抬起的键。
             for name in self._held_modifier_names():
+                if self._modifier_group(name) in output_mod_groups:
+                    continue
                 try:
                     kb.release(name)
                     lifted.append(name)
                 except Exception:
                     pass
             for key in output:
+                group = self._modifier_group(key)
+                if group and group in held_mod_groups:
+                    # 用户已物理按住的修饰键不重复注入
+                    continue
                 kb.press(key)
                 pressed.append(key)
             for key in reversed(pressed):

@@ -363,7 +363,11 @@ HKCU/Software/Microsoft/Windows/CurrentVersion/Run
 bindx_config.json
 ```
 
-椤跺眰缁撴瀯锛?
+椤�> 注意：该文件不纳入 git 版本控制（见 .gitignore），每台设备各自保留独立配置，
+> git 同步不会覆盖或产生冲突。新 clone 后首次运行会自动生成默认配置；
+> 需要参考结构时可查看 data/bindx_config.example.json。
+
+�眰缁撴瀯锛?
 
 ```json
 {

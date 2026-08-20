@@ -1,0 +1,19 @@
+{
+  "app": {
+    "hotkey_running": false,
+    "mouse_running": false,
+    "window_size": "945x582",
+    "window_zoomed": false,
+    "font_preset": "常规",
+    "autostart_enabled": false
+  },
+  "hotkeys": {
+    "display_name": "App Hotkey Manager",
+    "mutex_name": "Global\\AppHotkeyManager",
+    "entries": []
+  },
+  "mouse": {
+    "mappings": [],
+    "mouse_mappings": []
+  }
+}

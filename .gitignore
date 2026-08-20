@@ -5,3 +5,4 @@ build/
 dist/
 *.log
 REBUILD_PROMPT.md
+data/bindx_config.json
