@@ -43,6 +43,7 @@ class HotkeyCaptureDialog(_BindXDialog):
         self.captured_hotkey = current_hotkey
         self.captured = False
         self._pressed = set()
+        self._seen_down = set()
 
         ctk.CTkLabel(self.body, text="请按下快捷键组合", font=_dialog_font(self, 2, "bold")).pack(anchor=tk.W, pady=(0, scaled(self, 10)))
         self.hotkey_var = tk.StringVar(value=current_hotkey or "等待输入...")
@@ -71,10 +72,35 @@ class HotkeyCaptureDialog(_BindXDialog):
             return key.upper()
         return self.KEYSYM_MAP.get(key, key.upper())
 
+    def _state_modifiers(self, state):
+        mods = set()
+        if state & 0x04:
+            mods.add("CTRL")
+        if state & 0x08:
+            mods.add("ALT")
+        if state & 0x01:
+            mods.add("SHIFT")
+        return mods
+
+    def _finish_capture(self, hotkey):
+        self.captured_hotkey = hotkey
+        self.hotkey_var.set(hotkey)
+        self.captured = True
+        self.ok_btn.configure(state=tk.NORMAL)
+
     def _on_key_release(self, event):
         name = self._normalize(event.keysym)
         if name in self.MODIFIER_ORDER:
             self._pressed.discard(name)
+            return
+        if name in self._seen_down or name not in _hk_logic.VIRTUAL_KEYS:
+            return
+        # 兜底：系统已占用该组合时 keydown 被吞、只有 keyup 到达，
+        # 从 keyup 反推组合，保证录制框能记下用户按的内容
+        modifiers = self._pressed | self._state_modifiers(event.state)
+        if not modifiers:
+            return
+        self._finish_capture("+".join([m for m in self.MODIFIER_ORDER if m in modifiers] + [name]))
 
     def _on_key_press(self, event):
         name = self._normalize(event.keysym)
@@ -85,16 +111,15 @@ class HotkeyCaptureDialog(_BindXDialog):
             self.hotkey_var.set(f"不支持：{name}")
             self.ok_btn.configure(state=tk.DISABLED)
             return
+        self._seen_down.add(name)
         modifiers = [mod for mod in self.MODIFIER_ORDER if mod in self._pressed]
-        self.captured_hotkey = "+".join(modifiers + [name])
-        self.hotkey_var.set(self.captured_hotkey)
-        self.captured = True
-        self.ok_btn.configure(state=tk.NORMAL)
+        self._finish_capture("+".join(modifiers + [name]))
 
     def _on_clear(self):
         self.captured_hotkey = ""
         self.captured = False
         self._pressed.clear()
+        self._seen_down.clear()
         self.hotkey_var.set("等待输入...")
         self.ok_btn.configure(state=tk.DISABLED)
 
@@ -141,6 +166,7 @@ class KeyCaptureDialog(_BindXDialog):
         super().__init__(parent, title, 540, 230)
         self._pressed = set()
         self._captured = []
+        self._seen_down = set()
 
         ctk.CTkLabel(self.body, text="请按下目标按键组合", font=_dialog_font(self, 2, "bold")).pack(anchor=tk.W, pady=(0, scaled(self, 10)))
         self.key_var = tk.StringVar(value="等待输入...")
@@ -169,22 +195,45 @@ class KeyCaptureDialog(_BindXDialog):
             return key.lower()
         return self.KEYSYM_MAP.get(key, key)
 
+    def _state_modifiers(self, state):
+        mods = []
+        if state & 0x04:
+            mods.append("ctrl")
+        if state & 0x08:
+            mods.append("alt")
+        if state & 0x01:
+            mods.append("shift")
+        return mods
+
+    def _finish_capture(self):
+        self.key_var.set(" + ".join(self._captured))
+        self.ok_btn.configure(state=tk.NORMAL)
+
     def _on_key_release(self, event):
         name = self._normalize(event.keysym)
-        self._pressed.discard(name)
+        if name in self.MODIFIER_ORDER:
+            self._pressed.discard(name)
+            return
+        if name in self._seen_down:
+            return
+        # 兜底：keydown 被系统吞掉（组合被占用）时，从 keyup 补录
+        modifiers = [m for m in self.MODIFIER_ORDER if m in self._pressed or m in self._state_modifiers(event.state)]
+        self._captured = modifiers + [name]
+        self._finish_capture()
 
     def _on_key_press(self, event):
         name = self._normalize(event.keysym)
         if name in self.MODIFIER_ORDER:
             self._pressed.add(name)
             return
+        self._seen_down.add(name)
         modifiers = [mod for mod in self.MODIFIER_ORDER if mod in self._pressed]
         self._captured = modifiers + [name]
-        self.key_var.set(" + ".join(self._captured))
-        self.ok_btn.configure(state=tk.NORMAL)
+        self._finish_capture()
 
     def _on_clear(self):
         self._pressed.clear()
+        self._seen_down.clear()
         self._captured = []
         self.key_var.set("等待输入...")
         self.ok_btn.configure(state=tk.DISABLED)

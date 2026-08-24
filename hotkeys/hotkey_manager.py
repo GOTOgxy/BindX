@@ -1383,7 +1383,14 @@ class HotkeyManager:
         ctypes.set_last_error(0)
         ok = user32.RegisterHotKey(hwnd, entry["id"], entry["modifiers"], entry["virtual_key"])
         entry["registered"] = bool(ok)
-        entry["last_error"] = None if ok else ctypes.get_last_error()
+        if ok:
+            entry["last_error"] = None
+        else:
+            err = ctypes.get_last_error()
+            if err == 1409:
+                entry["last_error"] = "该快捷键已被系统或其他程序占用"
+            else:
+                entry["last_error"] = f"注册失败（错误码 {err}）"
         return bool(ok)
 
     def _unregister_now(self, hwnd, entry_id: int) -> bool:
