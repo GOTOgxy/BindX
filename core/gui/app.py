@@ -231,6 +231,9 @@ class BindXApp(ctk.CTk):
             state=tk.DISABLED,
         )
         menu.add_command(label=f"最近：{self.controller.trigger_engine.last_event}", state=tk.DISABLED)
+        last_error = self.controller.trigger_engine.last_error
+        if last_error:
+            menu.add_command(label=f"错误：{str(last_error)[:60]}", state=tk.DISABLED)
         menu.add_separator()
         menu.add_command(label="显示主窗口", command=self._show_window)
         menu.add_separator()

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import ctypes
+import os
 import threading
 import time
 from collections import deque
@@ -42,6 +43,11 @@ class _INPUT_UNION(ctypes.Union):
 
 class _INPUT(ctypes.Structure):
     _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
+
+
+def _tb_text():
+    import traceback
+    return traceback.format_exc()
 
 
 def _make_send_input():
@@ -340,6 +346,11 @@ class TriggerEngine:
                 dead = not self._thread or not self._thread.is_alive()
                 if dead or stale:
                     self.last_error = "Hook watchdog restarted trigger engine"
+                    age = (time.monotonic() - self.heartbeat) if self.heartbeat else -1.0
+                    self._diag_log(
+                        f"watchdog restarted hook thread: dead={dead}, stale={stale}, "
+                        f"running={self.running}, heartbeat_age={age:.2f}s"
+                    )
                     self._stop_thread()
                     self._ensure_running()
 
@@ -419,15 +430,25 @@ class TriggerEngine:
             self._suppressed_keyups = {
                 vk for vk in snap_suppressed if vk in self._pressed_vks
             }
-        self._sync_hotkey_status()
-        # A4: 启动输出队列 worker 线程
-        self._output_worker = threading.Thread(target=self._output_worker_loop, daemon=True)
-        self._output_worker.start()
-        user32.MsgWaitForMultipleObjectsW.argtypes = [
+        try:
+            self._sync_hotkey_status()
+            # A4: 启动输出队列 worker 线程
+            self._output_worker = threading.Thread(target=self._output_worker_loop, daemon=True)
+            self._output_worker.start()
+        except Exception:
+            self._diag_log("hook startup exception:\n" + _tb_text())
+            self.last_error = "Hook startup crashed (see data/bindx_hook_error.log)"
+            user32.UnhookWindowsHookEx(keyboard_hook)
+            user32.UnhookWindowsHookEx(mouse_hook)
+            self.running = False
+            return
+        # user32 导出的是 MsgWaitForMultipleObjects（没有 W/Ex 后缀变体，
+        # 注意别写成 MsgWaitForMultipleObjectsW——该符号不存在）
+        user32.MsgWaitForMultipleObjects.argtypes = [
             wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE),
             wintypes.BOOL, wintypes.DWORD, wintypes.DWORD,
         ]
-        user32.MsgWaitForMultipleObjectsW.restype = wintypes.DWORD
+        user32.MsgWaitForMultipleObjects.restype = wintypes.DWORD
         QS_ALLINPUT = 0x04FF
         msg = wintypes.MSG()
 
@@ -437,10 +458,15 @@ class TriggerEngine:
                 # 10ms 才被派发，移动会成批出现，表现为明显卡顿。
                 # MsgWaitForMultipleObjectsW 一有输入立即唤醒，
                 # 100ms 超时仅用于检测停止标志。
-                user32.MsgWaitForMultipleObjectsW(0, None, False, 100, QS_ALLINPUT)
-                while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, self.PM_REMOVE):
-                    user32.TranslateMessage(ctypes.byref(msg))
-                    user32.DispatchMessageW(ctypes.byref(msg))
+                try:
+                    user32.MsgWaitForMultipleObjects(0, None, False, 100, QS_ALLINPUT)
+                    while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, self.PM_REMOVE):
+                        user32.TranslateMessage(ctypes.byref(msg))
+                        user32.DispatchMessageW(ctypes.byref(msg))
+                except Exception:
+                    self._diag_log("hook message pump exception:\n" + _tb_text())
+                    self.last_error = "Hook pump crashed (see data/bindx_hook_error.log)"
+                    break
                 self.heartbeat = time.monotonic()
         finally:
             user32.UnhookWindowsHookEx(keyboard_hook)
@@ -469,7 +495,7 @@ class TriggerEngine:
             try:
                 self._do_output(keys)
             except Exception:
-                pass
+                self._diag_log("output worker exception:\n" + _tb_text())
         # 退出前排空残余输出
         with self._queue_lock:
             remaining = list(self._output_queue)
@@ -478,7 +504,7 @@ class TriggerEngine:
             try:
                 self._do_output(keys)
             except Exception:
-                pass
+                self._diag_log("output worker drain exception:\n" + _tb_text())
 
     def _note_hook_latency(self, started):
         if time.monotonic() - started > 0.1:
@@ -486,10 +512,30 @@ class TriggerEngine:
             if self._slow_hook_count == 1:
                 self.last_error = "Hook callback is slow (over 100ms); input may feel laggy"
 
+    def _diag_log(self, message):
+        # 诊断日志：pythonw 没有控制台，hook 线程/回调/消息泵的异常绝不能静默。
+        # 统一追加到 data/bindx_hook_error.log 供事后排查。
+        try:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(base, "data", "bindx_hook_error.log")
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"[{stamp}] {message}\n")
+        except Exception:
+            pass
+
     def _keyboard_proc(self, n_code, w_param, l_param):
         started = time.monotonic()
         try:
             return self._keyboard_proc_impl(n_code, w_param, l_param)
+        except Exception:
+            # 异常传播进原生 hook 派发会导致行为未定义（pythonw 下完全无输出）。
+            # 记录日志并退回"放行"。
+            self._diag_log("keyboard hook exception:\n" + _tb_text())
+            try:
+                return self._call_next_keyboard(n_code, w_param, l_param)
+            except Exception:
+                return 0
         finally:
             self._note_hook_latency(started)
 
@@ -561,6 +607,12 @@ class TriggerEngine:
         started = time.monotonic()
         try:
             return self._mouse_proc_impl(n_code, w_param, l_param)
+        except Exception:
+            self._diag_log("mouse hook exception:\n" + _tb_text())
+            try:
+                return self._call_next_mouse(n_code, w_param, l_param)
+            except Exception:
+                return 0
         finally:
             self._note_hook_latency(started)
 
