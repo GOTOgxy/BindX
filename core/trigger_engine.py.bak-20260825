@@ -67,24 +67,6 @@ class TriggerEngine:
         VK_RWIN: "right windows",
     }
 
-    # 修饰键状态双源共识参数：
-    # 物理事件跟踪与 GetAsyncKeyState 不一致时，容忍"物理残留"的宽限期，
-    # 超过宽限期判定为漏掉 keyup 的陈旧状态并清理
-    _STALE_GRACE_SECONDS = 0.15
-    # 注入临时抬起/恢复一个物理按住的修饰键时，异步状态不可靠的窗口长度
-    _LIFT_WINDOW_SECONDS = 0.5
-    # 修饰键名（_held_modifier_names 输出）-> 具体 VK
-    _MODIFIER_NAME_VK = {
-        "left shift": VK_LSHIFT,
-        "right shift": VK_RSHIFT,
-        "left ctrl": VK_LCONTROL,
-        "right ctrl": VK_RCONTROL,
-        "left alt": VK_LMENU,
-        "right alt": VK_RMENU,
-        "left windows": VK_LWIN,
-        "right windows": VK_RWIN,
-    }
-
     # 修饰键组名归一化：具体名（left ctrl 等）与通用名（ctrl 等）都映射到同一个组，
     # 用于判断"用户物理按住的修饰键"与"输出组合中的修饰键"是否属于同一组
     _MODIFIER_GROUP_ALIASES = {
@@ -197,11 +179,6 @@ class TriggerEngine:
 
         self._pressed_vks = set()
         self._physical_modifiers = set()
-        # 各修饰键物理按下的时间戳，用于判断"漏掉 keyup"后的陈旧物理状态
-        self._physical_mod_times: dict[int, float] = {}
-        # 正处于"注入临时抬起/恢复"窗口的修饰键（vk -> 窗口截止时间戳）；
-        # 窗口内 GetAsyncKeyState 不可靠，以物理事件跟踪为准
-        self._lift_expires: dict[int, float] = {}
         self._active_hotkeys = set()
         self._active_key_mappings = set()
         self._active_hotkey_times = {}
@@ -295,8 +272,6 @@ class TriggerEngine:
             self._snap_suppressed = set(self._suppressed_keyups)
             self._pressed_vks.clear()
             self._physical_modifiers.clear()
-            self._physical_mod_times.clear()
-            self._lift_expires.clear()
             self._active_hotkeys.clear()
             self._active_key_mappings.clear()
             self._active_hotkey_times.clear()
@@ -380,9 +355,6 @@ class TriggerEngine:
         self._physical_modifiers = {
             vk for vk in self.MODIFIER_KEYS
             if user32.GetAsyncKeyState(vk) & 0x8000
-        }
-        self._physical_mod_times = {
-            vk: time.monotonic() for vk in self._physical_modifiers
         }
         # A1: 恢复上次停止前的按键状态快照，过滤已不再物理按住的键
         snap_pressed = self._snap_pressed
@@ -476,7 +448,7 @@ class TriggerEngine:
         if is_down:
             if vk in self.MODIFIER_KEYS:
                 self._physical_modifiers.add(vk)
-                self._physical_mod_times[vk] = time.monotonic()
+            self._sync_modifier_state(exclude_vk=vk)
             was_pressed = vk in self._pressed_vks
             self._pressed_vks.add(vk)
             if was_pressed:
@@ -491,7 +463,7 @@ class TriggerEngine:
         elif is_up:
             if vk in self.MODIFIER_KEYS:
                 self._physical_modifiers.discard(vk)
-                self._physical_mod_times.pop(vk, None)
+            self._sync_modifier_state(exclude_vk=vk)
             self._pressed_vks.discard(vk)
             self._release_active_triggers(vk)
             if vk in self.MODIFIER_KEYS:
@@ -510,65 +482,28 @@ class TriggerEngine:
         # A2: 保留仍按住的键的抑制记录，避免组合状态清除后
         # 被抑制键的物理 key-up 穿透
         self._suppressed_keyups = {vk for vk in self._suppressed_keyups if vk in self._pressed_vks}
+        self._pressed_vks = {vk for vk in self._pressed_vks if vk in self.MODIFIER_KEYS}
+        self._sync_modifier_state()
 
-    def _effective_modifier_vks(self, now):
-        """双源共识计算当前真实按住的修饰键 VK 集合，并顺带清理陈旧状态。
-
-        一个修饰键必须"物理事件跟踪"与"GetAsyncKeyState"同时确认才算按住：
-        - GetAsyncKeyState 会被注入按键事件污染（鼠标侧键映射注入的 Ctrl、
-          输出时临时抬起/恢复物理按住的修饰键等），单独用它会把注入的
-          修饰键误判为"用户按住"——侧键点一下，随后按单个字母就匹配上
-          CTRL+ALT+A 之类热键，字母键被吞掉、目标应用被拉起抢走焦点；
-        - 物理事件跟踪在漏掉 keyup 时（钩子卡顿、看门狗重装、UAC 安全桌面
-          等）会残留"已松开但仍记录为按住"的幽灵修饰键——热键随机误触发，
-          输入法组合因焦点被抢而中断（中文输入突然变英文）。
-        两者不一致且物理按下已超出宽限期时，清理物理残留，保证漏 keyup
-        的幽灵状态约 150ms 内自愈，而不是永久存在。
-        """
-        if self._lift_expires:
-            self._lift_expires = {
-                vk: exp for vk, exp in self._lift_expires.items() if exp > now
-            }
+    def _sync_modifier_state(self, exclude_vk=None):
         user32 = self._user32
-        held = set()
+        if user32 is None:
+            return
+        # 物理按键事件是最可靠的状态来源；GetAsyncKeyState 会被注入的
+        # 按键事件污染（例如输出注入的 key-up 会让它误报修饰键已松开），
+        # 因此只把它作为物理跟踪之外的补充（覆盖引擎启动前已按住的键）。
+        live_modifiers = set(self._physical_modifiers)
         for group in self.MODIFIER_GROUPS:
-            phys = self._physical_modifiers & group
-            if not phys:
+            if exclude_vk in group:
                 continue
-            # 注入抬起/恢复窗口内异步状态不可靠：以物理跟踪为准
-            if any(now < self._lift_expires.get(vk, 0.0) for vk in phys):
-                held.update(phys)
-                continue
-            if user32 is None:
-                held.update(phys)
-                continue
-            async_down = False
             for candidate in group:
                 try:
                     if user32.GetAsyncKeyState(candidate) & 0x8000:
-                        async_down = True
-                        break
+                        live_modifiers.add(candidate)
                 except Exception:
-                    async_down = True
                     break
-            if async_down:
-                held.update(phys)
-                continue
-            # 异步已松开：物理按下仍在宽限期内可能是队列延迟，暂时保留；
-            # 超过宽限期则基本可断定是漏掉 keyup 的残留，清理物理状态
-            stale = True
-            for vk in phys:
-                t = self._physical_mod_times.get(vk)
-                if t is None or now - t < self._STALE_GRACE_SECONDS:
-                    stale = False
-                    break
-            if stale:
-                for vk in phys:
-                    self._physical_modifiers.discard(vk)
-                    self._physical_mod_times.pop(vk, None)
-            else:
-                held.update(phys)
-        return held
+        self._pressed_vks = {vk for vk in self._pressed_vks if vk not in self.MODIFIER_KEYS}
+        self._pressed_vks.update(live_modifiers)
 
     def _mouse_proc(self, n_code, w_param, l_param):
         started = time.monotonic()
@@ -619,15 +554,14 @@ class TriggerEngine:
         return self._user32.CallNextHookEx(None, n_code, w_param, l_param)
 
     def _current_modifiers(self):
-        eff = self._effective_modifier_vks(time.monotonic())
         modifiers = 0
-        if eff & self.CTRL_KEYS:
+        if self._pressed_vks & self.CTRL_KEYS:
             modifiers |= _hk.MOD_CONTROL
-        if eff & self.SHIFT_KEYS:
+        if self._pressed_vks & self.SHIFT_KEYS:
             modifiers |= _hk.MOD_SHIFT
-        if eff & self.ALT_KEYS:
+        if self._pressed_vks & self.ALT_KEYS:
             modifiers |= _hk.MOD_ALT
-        if eff & self.WIN_KEYS:
+        if self._pressed_vks & self.WIN_KEYS:
             modifiers |= _hk.MOD_WIN
         return modifiers
 
@@ -696,7 +630,7 @@ class TriggerEngine:
         # 只校正内部状态。绝不能在这里注入修饰键释放——用户可能正真实地
         # 按住 Ctrl/Alt/Shift（例如 Ctrl+滚轮缩放），注入 key-up 会把这些
         # 物理按住的键"杀死"，导致后续 Ctrl+C 之类组合退化成纯字母键。
-        self._effective_modifier_vks(time.monotonic())
+        self._sync_modifier_state()
 
     def _release_active_triggers(self, vk):
         for entry in self.hotkey_manager.entries:
@@ -774,16 +708,6 @@ class TriggerEngine:
     def _modifier_group(cls, name):
         return cls._MODIFIER_GROUP_ALIASES.get(str(name).strip().lower())
 
-    def _note_lift(self, name):
-        vk = self._MODIFIER_NAME_VK.get(name)
-        if vk is not None:
-            self._lift_expires[vk] = time.monotonic() + self._LIFT_WINDOW_SECONDS
-
-    def _forget_lift(self, name):
-        vk = self._MODIFIER_NAME_VK.get(name)
-        if vk is not None:
-            self._lift_expires.pop(vk, None)
-
     def _do_output(self, keys):
         output = self._normalize_output_keys(keys)
         if not output:
@@ -812,12 +736,11 @@ class TriggerEngine:
                 for name in self._held_modifier_names():
                     if self._modifier_group(name) in output_mod_groups:
                         continue
-                    self._note_lift(name)
                     try:
                         kb.release(name)
                         lifted.append(name)
                     except Exception:
-                        self._forget_lift(name)
+                        pass
             for key in output:
                 group = self._modifier_group(key)
                 if group and group in held_mod_groups:
@@ -837,16 +760,11 @@ class TriggerEngine:
                 still_held = set(self._held_modifier_names())
                 for name in reversed(lifted):
                     if name not in still_held:
-                        # 用户已物理松开该修饰键：无需恢复，关闭注入窗口
-                        self._forget_lift(name)
                         continue
                     try:
                         kb.press(name)
                     except Exception:
                         pass
-                    # 恢复按下已发出：系统处理完后异步状态才收敛，
-                    # 延长窗口避免收敛期间共识逻辑误判
-                    self._note_lift(name)
 
     def _log_injection(self, keys):
         # 记录一次注入事件，供检查器在短窗口内匹配
