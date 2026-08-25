@@ -6,11 +6,49 @@ import time
 from collections import deque
 from ctypes import wintypes
 
-import keyboard as kb
-
 from . import config_proxy
 
 _hk = config_proxy.hk_module()
+
+# ---------------------------------------------------------------------------
+# 直接 SendInput 键盘注入
+#
+# 旧版用 `keyboard` 库注入：该库会另外安装一个 WH_KEYBOARD_LL 全局 hook
+# 和专用消息线程，每个按键事件都要被两个 Python 级 hook 各处理一遍
+# （输入延迟、GIL 竞争、hook 被系统移除的诱因）；而且它对修饰键的
+# "恢复按下"从不释放，会污染系统修饰键状态。
+# 现在改为在输出 worker 线程直接 SendInput：每次注入仅两次系统调用
+# （全部按下 / 全部抬起），绝不触碰用户物理按住的键。
+# ---------------------------------------------------------------------------
+
+INPUT_KEYBOARD = 1
+KEYEVENTF_KEYUP = 0x0002
+BINDX_INJECTION_TAG = 0x58444E42  # "BDNX"，BindX 注入事件的 dwExtraInfo 标记
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT)]
+
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
+
+
+def _make_send_input():
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_INPUT), ctypes.c_int]
+    user32.SendInput.restype = wintypes.UINT
+    return user32.SendInput
 
 
 class TriggerEngine:
@@ -65,24 +103,6 @@ class TriggerEngine:
         VK_RMENU: "right alt",
         VK_LWIN: "left windows",
         VK_RWIN: "right windows",
-    }
-
-    # 修饰键状态双源共识参数：
-    # 物理事件跟踪与 GetAsyncKeyState 不一致时，容忍"物理残留"的宽限期，
-    # 超过宽限期判定为漏掉 keyup 的陈旧状态并清理
-    _STALE_GRACE_SECONDS = 0.15
-    # 注入临时抬起/恢复一个物理按住的修饰键时，异步状态不可靠的窗口长度
-    _LIFT_WINDOW_SECONDS = 0.5
-    # 修饰键名（_held_modifier_names 输出）-> 具体 VK
-    _MODIFIER_NAME_VK = {
-        "left shift": VK_LSHIFT,
-        "right shift": VK_RSHIFT,
-        "left ctrl": VK_LCONTROL,
-        "right ctrl": VK_RCONTROL,
-        "left alt": VK_LMENU,
-        "right alt": VK_RMENU,
-        "left windows": VK_LWIN,
-        "right windows": VK_RWIN,
     }
 
     # 修饰键组名归一化：具体名（left ctrl 等）与通用名（ctrl 等）都映射到同一个组，
@@ -197,11 +217,6 @@ class TriggerEngine:
 
         self._pressed_vks = set()
         self._physical_modifiers = set()
-        # 各修饰键物理按下的时间戳，用于判断"漏掉 keyup"后的陈旧物理状态
-        self._physical_mod_times: dict[int, float] = {}
-        # 正处于"注入临时抬起/恢复"窗口的修饰键（vk -> 窗口截止时间戳）；
-        # 窗口内 GetAsyncKeyState 不可靠，以物理事件跟踪为准
-        self._lift_expires: dict[int, float] = {}
         self._active_hotkeys = set()
         self._active_key_mappings = set()
         self._active_hotkey_times = {}
@@ -224,6 +239,14 @@ class TriggerEngine:
         # B5: 注入事件日志（供按键检查器标注 BindX 注入）
         self._injection_log = deque(maxlen=128)
         self._injection_log_lock = threading.Lock()
+        # SendInput 函数（仅输出 worker 线程调用）
+        self._send_input = _make_send_input()
+        # 预计算的触发索引（配置更新时重建；hook 回调只做查表）
+        self._mouse_button_map = {}
+        self._down_to_btn = {}
+        self._up_to_btn = {}
+        self._key_mappings = []
+        self._rebuild_mouse_index()
 
     def set_enabled(self, keyboard_enabled=None, mouse_enabled=None):
         with self._lock:
@@ -240,6 +263,7 @@ class TriggerEngine:
     def update_mouse_config(self, config):
         with self._lock:
             self.mouse_config = config
+            self._rebuild_mouse_index()
 
     def set_output_options(self, delay_ms=None, restore_held_modifiers=None):
         with self._lock:
@@ -249,6 +273,9 @@ class TriggerEngine:
                 except (TypeError, ValueError):
                     delay_ms = 20
                 self._output_delay_ms = max(0, delay_ms)
+            # 兼容字段：新版本不再"抬起/恢复"用户物理按住的修饰键
+            # （旧行为正是"组合键退化成纯字母键"和"幻影修饰键误触热键"的根源），
+            # 保留该设置只为兼容旧配置，不再起作用。
             if restore_held_modifiers is not None:
                 self._restore_held_modifiers = bool(restore_held_modifiers)
 
@@ -295,8 +322,6 @@ class TriggerEngine:
             self._snap_suppressed = set(self._suppressed_keyups)
             self._pressed_vks.clear()
             self._physical_modifiers.clear()
-            self._physical_mod_times.clear()
-            self._lift_expires.clear()
             self._active_hotkeys.clear()
             self._active_key_mappings.clear()
             self._active_hotkey_times.clear()
@@ -381,9 +406,6 @@ class TriggerEngine:
             vk for vk in self.MODIFIER_KEYS
             if user32.GetAsyncKeyState(vk) & 0x8000
         }
-        self._physical_mod_times = {
-            vk: time.monotonic() for vk in self._physical_modifiers
-        }
         # A1: 恢复上次停止前的按键状态快照，过滤已不再物理按住的键
         snap_pressed = self._snap_pressed
         snap_suppressed = self._snap_suppressed
@@ -401,15 +423,25 @@ class TriggerEngine:
         # A4: 启动输出队列 worker 线程
         self._output_worker = threading.Thread(target=self._output_worker_loop, daemon=True)
         self._output_worker.start()
+        user32.MsgWaitForMultipleObjectsW.argtypes = [
+            wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE),
+            wintypes.BOOL, wintypes.DWORD, wintypes.DWORD,
+        ]
+        user32.MsgWaitForMultipleObjectsW.restype = wintypes.DWORD
+        QS_ALLINPUT = 0x04FF
         msg = wintypes.MSG()
 
         try:
             while not self._stop_event.is_set():
+                # 旧实现是 PeekMessage + sleep(10ms)：高频鼠标事件最多要等
+                # 10ms 才被派发，移动会成批出现，表现为明显卡顿。
+                # MsgWaitForMultipleObjectsW 一有输入立即唤醒，
+                # 100ms 超时仅用于检测停止标志。
+                user32.MsgWaitForMultipleObjectsW(0, None, False, 100, QS_ALLINPUT)
                 while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, self.PM_REMOVE):
                     user32.TranslateMessage(ctypes.byref(msg))
                     user32.DispatchMessageW(ctypes.byref(msg))
                 self.heartbeat = time.monotonic()
-                time.sleep(0.01)
         finally:
             user32.UnhookWindowsHookEx(keyboard_hook)
             user32.UnhookWindowsHookEx(mouse_hook)
@@ -476,7 +508,7 @@ class TriggerEngine:
         if is_down:
             if vk in self.MODIFIER_KEYS:
                 self._physical_modifiers.add(vk)
-                self._physical_mod_times[vk] = time.monotonic()
+            self._sync_modifier_state(exclude_vk=vk)
             was_pressed = vk in self._pressed_vks
             self._pressed_vks.add(vk)
             if was_pressed:
@@ -491,7 +523,7 @@ class TriggerEngine:
         elif is_up:
             if vk in self.MODIFIER_KEYS:
                 self._physical_modifiers.discard(vk)
-                self._physical_mod_times.pop(vk, None)
+            self._sync_modifier_state(exclude_vk=vk)
             self._pressed_vks.discard(vk)
             self._release_active_triggers(vk)
             if vk in self.MODIFIER_KEYS:
@@ -508,67 +540,22 @@ class TriggerEngine:
         self._active_hotkey_times.clear()
         self._active_key_mapping_times.clear()
         # A2: 保留仍按住的键的抑制记录，避免组合状态清除后
-        # 被抑制键的物理 key-up 穿透
+        # 被抑制键的物理 key-up 穿透。
+        # 注意：仍被物理按住的非修饰键必须保留在 _pressed_vks 中
+        # （它们的 key-up 尚未到达），后续 auto-repeat 才会被正确吞掉；
+        # 旧实现把它们全部清掉，导致松开某个修饰键后，还在按住的键
+        # 的重复事件会以不同的组合（或纯字母）泄漏给目标程序。
         self._suppressed_keyups = {vk for vk in self._suppressed_keyups if vk in self._pressed_vks}
+        self._sync_modifier_state()
 
-    def _effective_modifier_vks(self, now):
-        """双源共识计算当前真实按住的修饰键 VK 集合，并顺带清理陈旧状态。
-
-        一个修饰键必须"物理事件跟踪"与"GetAsyncKeyState"同时确认才算按住：
-        - GetAsyncKeyState 会被注入按键事件污染（鼠标侧键映射注入的 Ctrl、
-          输出时临时抬起/恢复物理按住的修饰键等），单独用它会把注入的
-          修饰键误判为"用户按住"——侧键点一下，随后按单个字母就匹配上
-          CTRL+ALT+A 之类热键，字母键被吞掉、目标应用被拉起抢走焦点；
-        - 物理事件跟踪在漏掉 keyup 时（钩子卡顿、看门狗重装、UAC 安全桌面
-          等）会残留"已松开但仍记录为按住"的幽灵修饰键——热键随机误触发，
-          输入法组合因焦点被抢而中断（中文输入突然变英文）。
-        两者不一致且物理按下已超出宽限期时，清理物理残留，保证漏 keyup
-        的幽灵状态约 150ms 内自愈，而不是永久存在。
-        """
-        if self._lift_expires:
-            self._lift_expires = {
-                vk: exp for vk, exp in self._lift_expires.items() if exp > now
-            }
-        user32 = self._user32
-        held = set()
-        for group in self.MODIFIER_GROUPS:
-            phys = self._physical_modifiers & group
-            if not phys:
-                continue
-            # 注入抬起/恢复窗口内异步状态不可靠：以物理跟踪为准
-            if any(now < self._lift_expires.get(vk, 0.0) for vk in phys):
-                held.update(phys)
-                continue
-            if user32 is None:
-                held.update(phys)
-                continue
-            async_down = False
-            for candidate in group:
-                try:
-                    if user32.GetAsyncKeyState(candidate) & 0x8000:
-                        async_down = True
-                        break
-                except Exception:
-                    async_down = True
-                    break
-            if async_down:
-                held.update(phys)
-                continue
-            # 异步已松开：物理按下仍在宽限期内可能是队列延迟，暂时保留；
-            # 超过宽限期则基本可断定是漏掉 keyup 的残留，清理物理状态
-            stale = True
-            for vk in phys:
-                t = self._physical_mod_times.get(vk)
-                if t is None or now - t < self._STALE_GRACE_SECONDS:
-                    stale = False
-                    break
-            if stale:
-                for vk in phys:
-                    self._physical_modifiers.discard(vk)
-                    self._physical_mod_times.pop(vk, None)
-            else:
-                held.update(phys)
-        return held
+    def _sync_modifier_state(self, exclude_vk=None):
+        # 修饰键状态只以 _physical_modifiers（物理按键事件）为准；
+        # 引擎启动/重启时已用 GetAsyncKeyState 做一次性初始化。
+        # 旧实现每次按键事件都参考 GetAsyncKeyState，而该状态会被注入事件
+        # 污染（尤其是旧版"恢复按下"的修饰键从不释放），产生幻影修饰键——
+        # 这是"按纯字母键误触组合热键、乱启动程序"的根源。
+        # 同时省掉了每次按键 8 个 GetAsyncKeyState 系统调用。
+        self._pressed_vks = {vk for vk in self._pressed_vks if vk not in self.MODIFIER_KEYS}
 
     def _mouse_proc(self, n_code, w_param, l_param):
         started = time.monotonic()
@@ -581,32 +568,49 @@ class TriggerEngine:
         if n_code < 0 or not self.mouse_enabled:
             return self._call_next_mouse(n_code, w_param, l_param)
 
-        if w_param in (self.WM_MOUSEWHEEL, self.WM_MOUSEHWHEEL):
-            self._clear_stale_modifier_state()
-            return self._call_next_mouse(n_code, w_param, l_param)
-
-        info = ctypes.cast(l_param, ctypes.POINTER(self.MSLLHOOKSTRUCT)).contents
-        for mapping in self.mouse_config.get("mouse_mappings", []):
-            if not mapping.get("enabled", True):
-                continue
-            btn = mapping.get("button")
-            if btn not in self.BUTTON_MAP:
-                continue
-            down_msg, up_msg = self.BUTTON_MAP[btn]
-            if w_param == down_msg:
-                if btn in self.XBUTTON_MAP:
-                    xbtn = info.mouseData >> 16
-                    if xbtn != self.XBUTTON_MAP[btn]:
-                        continue
-                self._suppressed_mouse_buttons.add(btn)
-                self.last_event = f"Mouse {btn} -> {'+'.join(mapping.get('output', []))}"
-                with self._queue_lock:
-                    self._output_queue.append(list(mapping.get("output", [])))
-                return 1
-            if w_param == up_msg and btn in self._suppressed_mouse_buttons:
+        # 绝大多数事件是移动类事件：直接透传给下一个 hook，
+        # 不做任何额外处理，消除高回报率鼠标下的主要卡顿来源。
+        if w_param == self.WM_XBUTTONDOWN or w_param == self.WM_XBUTTONUP:
+            info = ctypes.cast(l_param, ctypes.POINTER(self.MSLLHOOKSTRUCT)).contents
+            xbtn = (int(info.mouseData) >> 16) & 0xFFFF
+            btn = {1: "x1", 2: "x2"}.get(xbtn)
+            if btn is None:
+                return self._call_next_mouse(n_code, w_param, l_param)
+            if w_param == self.WM_XBUTTONDOWN:
+                mapping = self._mouse_button_map.get(btn)
+                if mapping is not None:
+                    self._trigger_mouse(btn, mapping)
+                    return 1
+            elif btn in self._suppressed_mouse_buttons:
                 self._suppressed_mouse_buttons.discard(btn)
                 return 1
+            return self._call_next_mouse(n_code, w_param, l_param)
+
+        btn = self._down_to_btn.get(w_param)
+        if btn is not None:
+            mapping = self._mouse_button_map.get(btn)
+            if mapping is not None:
+                self._trigger_mouse(btn, mapping)
+                return 1
+            return self._call_next_mouse(n_code, w_param, l_param)
+
+        btn = self._up_to_btn.get(w_param)
+        if btn is not None and btn in self._suppressed_mouse_buttons:
+            self._suppressed_mouse_buttons.discard(btn)
+            return 1
+
+        if w_param in (self.WM_MOUSEWHEEL, self.WM_MOUSEHWHEEL):
+            # 滚轮不参与触发；顺手同步内部修饰键状态
+            # （新版 _sync_modifier_state 不再调用 GetAsyncKeyState，开销可忽略）。
+            self._sync_modifier_state()
+
         return self._call_next_mouse(n_code, w_param, l_param)
+
+    def _trigger_mouse(self, btn, mapping):
+        self._suppressed_mouse_buttons.add(btn)
+        self.last_event = f"Mouse {btn} -> {'+'.join(mapping.get('output', []))}"
+        with self._queue_lock:
+            self._output_queue.append(list(mapping.get("output", [])))
 
     def _call_next_keyboard(self, n_code, w_param, l_param):
         if self._user32 is None:
@@ -619,15 +623,16 @@ class TriggerEngine:
         return self._user32.CallNextHookEx(None, n_code, w_param, l_param)
 
     def _current_modifiers(self):
-        eff = self._effective_modifier_vks(time.monotonic())
+        # 只用物理修饰键状态做匹配。_pressed_vks 曾混入 GetAsyncKeyState
+        # 补充的幻影修饰键（被注入事件污染），会导致纯字母键误判成组合键。
         modifiers = 0
-        if eff & self.CTRL_KEYS:
+        if self._physical_modifiers & self.CTRL_KEYS:
             modifiers |= _hk.MOD_CONTROL
-        if eff & self.SHIFT_KEYS:
+        if self._physical_modifiers & self.SHIFT_KEYS:
             modifiers |= _hk.MOD_SHIFT
-        if eff & self.ALT_KEYS:
+        if self._physical_modifiers & self.ALT_KEYS:
             modifiers |= _hk.MOD_ALT
-        if eff & self.WIN_KEYS:
+        if self._physical_modifiers & self.WIN_KEYS:
             modifiers |= _hk.MOD_WIN
         return modifiers
 
@@ -657,11 +662,10 @@ class TriggerEngine:
         if vk in self.MODIFIER_KEYS:
             return False
         current_mods = self._current_modifiers()
-        for idx, mapping in enumerate(self.mouse_config.get("mappings", [])):
-            if not mapping.get("enabled", True):
-                continue
-            parsed = self._parse_combo(mapping.get("trigger", []))
-            if parsed is None:
+        # 使用预计算索引；旧实现每次 key-down 都对每个 mapping 现场
+        # _parse_combo 解析字符串。
+        for idx, mapping, parsed in self._key_mappings:
+            if parsed is None or not mapping.get("enabled", True):
                 continue
             trigger_mods, trigger_vk = parsed
             if trigger_vk != vk or trigger_mods != current_mods:
@@ -692,20 +696,13 @@ class TriggerEngine:
             if vk in held
         ]
 
-    def _clear_stale_modifier_state(self):
-        # 只校正内部状态。绝不能在这里注入修饰键释放——用户可能正真实地
-        # 按住 Ctrl/Alt/Shift（例如 Ctrl+滚轮缩放），注入 key-up 会把这些
-        # 物理按住的键"杀死"，导致后续 Ctrl+C 之类组合退化成纯字母键。
-        self._effective_modifier_vks(time.monotonic())
-
     def _release_active_triggers(self, vk):
         for entry in self.hotkey_manager.entries:
             if entry.get("virtual_key") == vk:
                 self._active_hotkeys.discard(entry["id"])
                 self._active_hotkey_times.pop(entry["id"], None)
-        for idx, mapping in enumerate(self.mouse_config.get("mappings", [])):
-            parsed = self._parse_combo(mapping.get("trigger", []))
-            if parsed and parsed[1] == vk:
+        for idx, _mapping, parsed in self._key_mappings:
+            if parsed is not None and parsed[1] == vk:
                 self._active_key_mappings.discard(idx)
                 self._active_key_mapping_times.pop(idx, None)
 
@@ -743,6 +740,60 @@ class TriggerEngine:
                 return 0x6F + num
         return self.SPECIAL_KEYS.get(name)
 
+    # 输出键名 -> 虚拟键码（修饰键固定用左侧 vk，与旧 keyboard 库行为一致）
+    _OUTPUT_MODIFIER_VKS = {
+        "ctrl": VK_LCONTROL,
+        "control": VK_LCONTROL,
+        "left ctrl": VK_LCONTROL,
+        "right ctrl": VK_RCONTROL,
+        "shift": VK_LSHIFT,
+        "left shift": VK_LSHIFT,
+        "right shift": VK_RSHIFT,
+        "alt": VK_LMENU,
+        "left alt": VK_LMENU,
+        "right alt": VK_RMENU,
+        "altgr": VK_RMENU,
+        "win": VK_LWIN,
+        "windows": VK_LWIN,
+        "cmd": VK_LWIN,
+        "super": VK_LWIN,
+        "left windows": VK_LWIN,
+        "right windows": VK_RWIN,
+    }
+
+    def _output_key_to_vk(self, name):
+        n = str(name).strip().lower()
+        if not n:
+            return None
+        if n in self._OUTPUT_MODIFIER_VKS:
+            return self._OUTPUT_MODIFIER_VKS[n]
+        if n.startswith("num") and len(n) == 4 and n[3:].isdigit():
+            return 0x60 + int(n[3])
+        return self._key_name_to_vk(n)
+
+    def _rebuild_mouse_index(self):
+        """预计算 hook 回调用的触发索引；回调只查表，不再遍历配置/解析字符串。"""
+        mouse_map = {}
+        down_to_btn = {}
+        up_to_btn = {}
+        for mapping in self.mouse_config.get("mouse_mappings", []):
+            if not mapping.get("enabled", True):
+                continue
+            btn = mapping.get("button")
+            if btn not in self.BUTTON_MAP or btn in mouse_map:
+                continue
+            mouse_map[btn] = mapping
+            if btn not in self.XBUTTON_MAP:
+                down_to_btn[self.BUTTON_MAP[btn][0]] = btn
+                up_to_btn[self.BUTTON_MAP[btn][1]] = btn
+        key_mappings = []
+        for idx, mapping in enumerate(self.mouse_config.get("mappings", [])):
+            key_mappings.append((idx, mapping, self._parse_combo(mapping.get("trigger", []))))
+        self._mouse_button_map = mouse_map
+        self._down_to_btn = down_to_btn
+        self._up_to_btn = up_to_btn
+        self._key_mappings = key_mappings
+
     @staticmethod
     def _normalize_key_name(name):
         name = name.strip().lower().replace("_", " ")
@@ -774,79 +825,63 @@ class TriggerEngine:
     def _modifier_group(cls, name):
         return cls._MODIFIER_GROUP_ALIASES.get(str(name).strip().lower())
 
-    def _note_lift(self, name):
-        vk = self._MODIFIER_NAME_VK.get(name)
-        if vk is not None:
-            self._lift_expires[vk] = time.monotonic() + self._LIFT_WINDOW_SECONDS
-
-    def _forget_lift(self, name):
-        vk = self._MODIFIER_NAME_VK.get(name)
-        if vk is not None:
-            self._lift_expires.pop(vk, None)
-
     def _do_output(self, keys):
         output = self._normalize_output_keys(keys)
         if not output:
             return
-        pressed = []
-        lifted = []
-        # 输出组合包含的修饰键组（如 ctrl/shift/alt/win）
-        output_mod_groups = set()
-        for k in output:
-            group = self._modifier_group(k)
-            if group:
-                output_mod_groups.add(group)
         # 用户当前物理按住的修饰键组
         held_mod_groups = set()
         for n in self._held_modifier_names():
             group = self._modifier_group(n)
             if group:
                 held_mod_groups.add(group)
-        try:
-            time.sleep(self._output_delay_ms / 1000.0)
-            self._log_injection(output)
-            # 用户物理按住、但不在输出组合中的修饰键先临时抬起，避免污染输出组合；
-            # 输出组合里包含的修饰键保持按下（目标应用能拿到正确的修饰键状态，
-            # 修复 Ctrl+C 被注入成纯字母 c 之类的问题），输出完成后再恢复多抬起的键。
-            if self._restore_held_modifiers:
-                for name in self._held_modifier_names():
-                    if self._modifier_group(name) in output_mod_groups:
-                        continue
-                    self._note_lift(name)
-                    try:
-                        kb.release(name)
-                        lifted.append(name)
-                    except Exception:
-                        self._forget_lift(name)
-            for key in output:
-                group = self._modifier_group(key)
-                if group and group in held_mod_groups:
-                    # 用户已物理按住的修饰键不重复注入
-                    continue
-                kb.press(key)
-                pressed.append(key)
-            for key in reversed(pressed):
-                kb.release(key)
-        finally:
-            for key in reversed(pressed):
-                try:
-                    kb.release(key)
-                except Exception:
-                    pass
-            if lifted:
-                still_held = set(self._held_modifier_names())
-                for name in reversed(lifted):
-                    if name not in still_held:
-                        # 用户已物理松开该修饰键：无需恢复，关闭注入窗口
-                        self._forget_lift(name)
-                        continue
-                    try:
-                        kb.press(name)
-                    except Exception:
-                        pass
-                    # 恢复按下已发出：系统处理完后异步状态才收敛，
-                    # 延长窗口避免收敛期间共识逻辑误判
-                    self._note_lift(name)
+        press_vks = []
+        unknown = []
+        for key in output:
+            group = self._modifier_group(key)
+            if group and group in held_mod_groups:
+                # 用户已物理按住的修饰键不重复注入（保留 Ctrl+C 修复：
+                # 目标应用能拿到物理修饰键状态，组合键输入不被破坏）。
+                continue
+            vk = self._output_key_to_vk(key)
+            if vk is None:
+                unknown.append(key)
+                continue
+            if vk in press_vks:
+                continue
+            press_vks.append(vk)
+        if not press_vks:
+            return
+        if unknown:
+            self.last_error = f"Unknown output key: {'+'.join(unknown)}"
+        self._log_injection(output)
+        self._inject_keys(press_vks)
+
+    def _inject_keys(self, vks):
+        """按下 -> 保持 _output_delay_ms -> 反序抬起，各用一次 SendInput。
+
+        绝不释放或按下用户物理按住的修饰键：旧版"先抬起、输出后恢复"
+        会在窗口期让目标应用看到修饰键已松开（组合退化成纯字母键），
+        且"恢复按下"是一次从不释放的注入，会污染 GetAsyncKeyState
+        产生幻影修饰键（纯字母键误触组合热键）。
+        """
+        n = len(vks)
+        inputs = (_INPUT * n)()
+        for i, vk in enumerate(vks):
+            inputs[i].type = INPUT_KEYBOARD
+            inputs[i].u.ki.wVk = vk
+            inputs[i].u.ki.dwExtraInfo = BINDX_INJECTION_TAG
+        sent = self._send_input(n, inputs, ctypes.sizeof(_INPUT))
+        if sent != n:
+            self.last_error = f"SendInput press failed: {sent}/{n}"
+        time.sleep(self._output_delay_ms / 1000.0)
+        inputs = (_INPUT * n)()
+        for i, vk in enumerate(reversed(vks)):
+            inputs[i].type = INPUT_KEYBOARD
+            inputs[i].u.ki.wVk = vk
+            inputs[i].u.ki.dwFlags = KEYEVENTF_KEYUP
+            inputs[i].u.ki.dwExtraInfo = BINDX_INJECTION_TAG
+        self._send_input(n, inputs, ctypes.sizeof(_INPUT))
 
     def _log_injection(self, keys):
         # 记录一次注入事件，供检查器在短窗口内匹配
