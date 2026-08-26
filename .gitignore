@@ -1,4 +1,4 @@
-__pycache__/
+﻿__pycache__/
 *.pyc
 *.pyo
 build/
@@ -7,4 +7,4 @@ dist/
 REBUILD_PROMPT.md
 data/bindx_config.json
 data/bindx_config.json.bak
-*.bak
+*.bak*
