@@ -2,6 +2,7 @@
 """BindX UI: 按键检查器窗口。"""
 
 import ctypes
+import json
 import queue
 import threading
 import time
@@ -116,8 +117,9 @@ class InputInspectorWindow(ctk.CTkToplevel):
         self.start_button.grid(row=0, column=1, sticky="e", padx=(0, scaled(self, 8)))
         self.stop_button = ctk.CTkButton(header, text="停止检查", command=self._stop_inspection, width=scaled(self, 92), fg_color="#52525b", hover_color="#3f3f46")
         self.stop_button.grid(row=0, column=2, sticky="e", padx=(0, scaled(self, 8)))
-        ctk.CTkButton(header, text="清空记录", command=self._clear_records, width=scaled(self, 92), fg_color="#52525b", hover_color="#3f3f46").grid(row=0, column=3, sticky="e", padx=(0, scaled(self, 8)))
-        ctk.CTkButton(header, text="关闭", command=self._on_close, width=scaled(self, 72), fg_color="#52525b", hover_color="#3f3f46").grid(row=0, column=4, sticky="e")
+        ctk.CTkButton(header, text="复制诊断", command=self._copy_diagnostics, width=scaled(self, 92), fg_color="#52525b", hover_color="#3f3f46").grid(row=0, column=3, sticky="e", padx=(0, scaled(self, 8)))
+        ctk.CTkButton(header, text="清空记录", command=self._clear_records, width=scaled(self, 92), fg_color="#52525b", hover_color="#3f3f46").grid(row=0, column=4, sticky="e", padx=(0, scaled(self, 8)))
+        ctk.CTkButton(header, text="关闭", command=self._on_close, width=scaled(self, 72), fg_color="#52525b", hover_color="#3f3f46").grid(row=0, column=5, sticky="e")
 
         content = ctk.CTkFrame(self, fg_color="transparent")
         content.grid(row=1, column=0, sticky="nsew", padx=scaled(self, 18), pady=(0, scaled(self, 10)))
@@ -435,6 +437,20 @@ class InputInspectorWindow(ctk.CTkToplevel):
         self._keyboard_history.clear()
         self._mouse_history.clear()
         self._render_pressed()
+
+    def _copy_diagnostics(self):
+        engine = self.controller.trigger_engine if self.controller is not None else None
+        if engine is None or not hasattr(engine, "export_event_log"):
+            self.status_label.configure(text="诊断复制失败：触发引擎不可用")
+            return
+        try:
+            events = engine.export_event_log()
+            text = json.dumps(events, ensure_ascii=False, indent=2)
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.status_label.configure(text=f"已复制最近 {len(events)} 条键盘诊断")
+        except Exception as exc:
+            self.status_label.configure(text=f"诊断复制失败：{exc}")
 
     def _textbox_at_bottom(self, textbox):
         try:

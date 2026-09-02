@@ -842,6 +842,10 @@ class AppController:
             if self.hide_from_taskbar:
                 self._hide_from_taskbar(hwnd)
             user32.ShowWindow(hwnd, SW_MINIMIZE)
+            if self.hide_from_taskbar:
+                # WS_EX_TOOLWINDOW + SW_MINIMIZE can leave a tiny minimized
+                # window in the lower-left corner on Firefox/Electron apps.
+                user32.ShowWindow(hwnd, SW_HIDE)
             self._mark_action("hide", hwnd)
             self._record_behavior(
                 hide_behavior="simple_minimize_taskbar_hidden" if self.hide_from_taskbar else "simple_minimize"
@@ -863,6 +867,8 @@ class AppController:
         if self.hide_from_taskbar:
             self._hide_from_taskbar(hwnd)
         user32.ShowWindow(hwnd, SW_MINIMIZE)
+        if self.hide_from_taskbar:
+            user32.ShowWindow(hwnd, SW_HIDE)
         self._mark_action("hide", hwnd)
         self._record_behavior(hide_behavior="minimize")
         return True
@@ -1005,6 +1011,11 @@ class AppController:
 
     def _get_remembered_window(self, pids: list[int]) -> int | None:
         if self.disable_window_memory:
+            # Termius disables general window memory because its handles change
+            # often, but a window hidden by BindX still needs a direct restore path.
+            for hwnd in self._taskbar_hidden_hwnds:
+                if user32.IsWindow(hwnd) and (not pids or get_window_pid(hwnd) in pids):
+                    return hwnd
             return None
         hwnd = int(self.session_state.get("last_hwnd", 0) or 0)
         if not hwnd or not user32.IsWindow(hwnd):

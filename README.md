@@ -27,7 +27,7 @@ BindX 不做窗口管理器，也不试图完整替代系统快捷键工具。�
 pip install -r requirements.txt
 ```
 
-`requirements.txt` 包含：`keyboard`、`pynput`、`customtkinter`。
+`requirements.txt` 包含：`pynput`、`customtkinter`。
 
 ## 启动方式
 
@@ -50,11 +50,11 @@ pip install -r requirements.txt
 
 ### 组合键注入修复（Ctrl+C 问题）
 
-早期版本在注入按键时会连带释放修饰键，导致物理按住的 `Ctrl+C` 退化成纯 `C`。现在注入事件时会保留当前物理按住的修饰键（Ctrl/Alt/Shift）状态，组合键输入不再被破坏。
+早期版本在注入按键时会连带释放修饰键，导致物理按住的 `Ctrl+C` 退化成纯 `C`。现在输出统一使用 Windows `SendInput`，并带 BindX 专属注入标记；修饰键匹配只依据物理键盘事件，注入事件不会污染 Ctrl/Alt/Shift 状态。
 
 ### 按键检查器
 
-热键页工具栏的"按键检查"按钮可打开按键检查器窗口，实时显示所有键盘/鼠标事件。由 BindX 注入的事件会带 `[BindX 注入]` 标注，方便排查"某个键到底是哪个软件发出来的"。
+热键页工具栏的"按键检查"按钮可打开按键检查器窗口，实时显示所有键盘/鼠标事件。由 BindX 注入的事件会带 `[BindX 注入]` 标注，方便排查"某个键到底是哪个软件发出来的"。"复制诊断"会把最近 500 条键盘事件日志复制到剪贴板。
 
 ### 小键盘数字键
 

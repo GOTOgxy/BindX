@@ -6,11 +6,70 @@ import time
 from collections import deque
 from ctypes import wintypes
 
-import keyboard as kb
-
 from . import config_proxy
 
 _hk = config_proxy.hk_module()
+
+BINDX_EXTRA_INFO = 0x42494E58
+GCS_COMPSTR = 0x0008
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    ]
+
+
+class INPUTUNION(ctypes.Union):
+    _fields_ = [
+        ("mi", MOUSEINPUT),
+        ("ki", KEYBDINPUT),
+        ("hi", HARDWAREINPUT),
+    ]
+
+
+class INPUT(ctypes.Structure):
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("union", INPUTUNION),
+    ]
+
+
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("hwndActive", wintypes.HWND),
+        ("hwndFocus", wintypes.HWND),
+        ("hwndCapture", wintypes.HWND),
+        ("hwndMenuOwner", wintypes.HWND),
+        ("hwndMoveSize", wintypes.HWND),
+        ("hwndCaret", wintypes.HWND),
+        ("rcCaret", wintypes.RECT),
+    ]
 
 
 class TriggerEngine:
@@ -36,6 +95,9 @@ class TriggerEngine:
     WM_XBUTTONUP = 0x020C
 
     LLKHF_INJECTED = 0x10
+    KEYEVENTF_KEYUP = 0x0002
+    INPUT_KEYBOARD = 1
+    EVENT_LOG_SIZE = 500
     PM_REMOVE = 0x0001
 
     VK_SHIFT = 0x10
@@ -67,24 +129,6 @@ class TriggerEngine:
         VK_RWIN: "right windows",
     }
 
-    # 修饰键状态双源共识参数：
-    # 物理事件跟踪与 GetAsyncKeyState 不一致时，容忍"物理残留"的宽限期，
-    # 超过宽限期判定为漏掉 keyup 的陈旧状态并清理
-    _STALE_GRACE_SECONDS = 0.15
-    # 注入临时抬起/恢复一个物理按住的修饰键时，异步状态不可靠的窗口长度
-    _LIFT_WINDOW_SECONDS = 0.5
-    # 修饰键名（_held_modifier_names 输出）-> 具体 VK
-    _MODIFIER_NAME_VK = {
-        "left shift": VK_LSHIFT,
-        "right shift": VK_RSHIFT,
-        "left ctrl": VK_LCONTROL,
-        "right ctrl": VK_RCONTROL,
-        "left alt": VK_LMENU,
-        "right alt": VK_RMENU,
-        "left windows": VK_LWIN,
-        "right windows": VK_RWIN,
-    }
-
     # 修饰键组名归一化：具体名（left ctrl 等）与通用名（ctrl 等）都映射到同一个组，
     # 用于判断"用户物理按住的修饰键"与"输出组合中的修饰键"是否属于同一组
     _MODIFIER_GROUP_ALIASES = {
@@ -112,6 +156,24 @@ class TriggerEngine:
         "middle": (WM_MBUTTONDOWN, WM_MBUTTONUP),
         "x1": (WM_XBUTTONDOWN, WM_XBUTTONUP),
         "x2": (WM_XBUTTONDOWN, WM_XBUTTONUP),
+    }
+
+    OUTPUT_MODIFIER_VKS = {
+        "ctrl": VK_CONTROL,
+        "control": VK_CONTROL,
+        "left ctrl": VK_LCONTROL,
+        "right ctrl": VK_RCONTROL,
+        "shift": VK_SHIFT,
+        "left shift": VK_LSHIFT,
+        "right shift": VK_RSHIFT,
+        "alt": VK_MENU,
+        "altgr": VK_RMENU,
+        "left alt": VK_LMENU,
+        "right alt": VK_RMENU,
+        "win": VK_LWIN,
+        "windows": VK_LWIN,
+        "left windows": VK_LWIN,
+        "right windows": VK_RWIN,
     }
     XBUTTON_MAP = {"x1": 1, "x2": 2}
 
@@ -197,11 +259,6 @@ class TriggerEngine:
 
         self._pressed_vks = set()
         self._physical_modifiers = set()
-        # 各修饰键物理按下的时间戳，用于判断"漏掉 keyup"后的陈旧物理状态
-        self._physical_mod_times: dict[int, float] = {}
-        # 正处于"注入临时抬起/恢复"窗口的修饰键（vk -> 窗口截止时间戳）；
-        # 窗口内 GetAsyncKeyState 不可靠，以物理事件跟踪为准
-        self._lift_expires: dict[int, float] = {}
         self._active_hotkeys = set()
         self._active_key_mappings = set()
         self._active_hotkey_times = {}
@@ -209,6 +266,7 @@ class TriggerEngine:
         self._suppressed_keyups = set()
         self._suppressed_mouse_buttons = set()
         self._user32 = None
+        self._imm32 = None
 
         # A3: 输出延迟与是否恢复物理按住的修饰键
         self._output_delay_ms = 20
@@ -218,12 +276,13 @@ class TriggerEngine:
         self._snap_suppressed = None
         # A4: 输出队列与 worker 线程（串行化输出）
         self._output_queue = []
-        self._output_worker = None
         # 钩子回调延迟统计
         self._slow_hook_count = 0
         # B5: 注入事件日志（供按键检查器标注 BindX 注入）
         self._injection_log = deque(maxlen=128)
         self._injection_log_lock = threading.Lock()
+        # 键盘事件诊断日志：只保留最近事件，用于定位吞键/增键
+        self._event_log = deque(maxlen=self.EVENT_LOG_SIZE)
 
     def set_enabled(self, keyboard_enabled=None, mouse_enabled=None):
         with self._lock:
@@ -258,6 +317,18 @@ class TriggerEngine:
             self._hotkey_queue.clear()
         return events
 
+    def export_event_log(self):
+        with self._lock:
+            entries = list(self._event_log)
+        exported = []
+        for entry in entries:
+            item = dict(entry)
+            item["time"] = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(item.pop("wall_time"))
+            )
+            exported.append(item)
+        return exported
+
     def reinstall_hooks(self):
         with self._lock:
             self._stop_thread()
@@ -290,13 +361,12 @@ class TriggerEngine:
         if not thread or not thread.is_alive():
             self._thread = None
             self.running = False
+            self._output_worker = None
             # A1: 快照当前按键状态，钩子重装后恢复
             self._snap_pressed = set(self._pressed_vks)
             self._snap_suppressed = set(self._suppressed_keyups)
             self._pressed_vks.clear()
             self._physical_modifiers.clear()
-            self._physical_mod_times.clear()
-            self._lift_expires.clear()
             self._active_hotkeys.clear()
             self._active_key_mappings.clear()
             self._active_hotkey_times.clear()
@@ -329,7 +399,9 @@ class TriggerEngine:
     def _run(self):
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        imm32 = ctypes.WinDLL("imm32", use_last_error=True)
         self._user32 = user32
+        self._imm32 = imm32
 
         HOOKPROC = ctypes.WINFUNCTYPE(
             wintypes.LPARAM, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
@@ -355,6 +427,30 @@ class TriggerEngine:
         user32.DispatchMessageW.restype = wintypes.LPARAM
         user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
         user32.GetAsyncKeyState.restype = ctypes.c_short
+        user32.SendInput.argtypes = [
+            wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int
+        ]
+        user32.SendInput.restype = wintypes.UINT
+        user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+        user32.MapVirtualKeyW.restype = wintypes.UINT
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD)
+        ]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.GetGUIThreadInfo.argtypes = [
+            wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)
+        ]
+        user32.GetGUIThreadInfo.restype = wintypes.BOOL
+        imm32.ImmGetContext.argtypes = [wintypes.HWND]
+        imm32.ImmGetContext.restype = ctypes.c_void_p
+        imm32.ImmReleaseContext.argtypes = [wintypes.HWND, ctypes.c_void_p]
+        imm32.ImmReleaseContext.restype = wintypes.BOOL
+        imm32.ImmGetCompositionStringW.argtypes = [
+            ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD
+        ]
+        imm32.ImmGetCompositionStringW.restype = ctypes.c_long
         kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
         kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 
@@ -380,9 +476,6 @@ class TriggerEngine:
         self._physical_modifiers = {
             vk for vk in self.MODIFIER_KEYS
             if user32.GetAsyncKeyState(vk) & 0x8000
-        }
-        self._physical_mod_times = {
-            vk: time.monotonic() for vk in self._physical_modifiers
         }
         # A1: 恢复上次停止前的按键状态快照，过滤已不再物理按住的键
         snap_pressed = self._snap_pressed
@@ -432,17 +525,9 @@ class TriggerEngine:
                 if self._output_queue:
                     keys = self._output_queue.pop(0)
             if keys is None:
-                time.sleep(0.005)
+                if self._stop_event.wait(0.005):
+                    break
                 continue
-            try:
-                self._do_output(keys)
-            except Exception:
-                pass
-        # 退出前排空残余输出
-        with self._queue_lock:
-            remaining = list(self._output_queue)
-            self._output_queue.clear()
-        for keys in remaining:
             try:
                 self._do_output(keys)
             except Exception:
@@ -461,45 +546,89 @@ class TriggerEngine:
         finally:
             self._note_hook_latency(started)
 
+    def _append_event_log_locked(self, vk, msg, flags, extra_info, source, action, modifiers, detail=""):
+        self._event_log.append({
+            "monotonic": time.monotonic(),
+            "wall_time": time.time(),
+            "vk": vk,
+            "msg": int(msg),
+            "flags": int(flags),
+            "extra_info": int(extra_info),
+            "source": source,
+            "action": action,
+            "modifiers": sorted(modifiers),
+            "detail": detail,
+        })
+
     def _keyboard_proc_impl(self, n_code, w_param, l_param):
         if n_code < 0:
             return self._call_next_keyboard(n_code, w_param, l_param)
 
         info = ctypes.cast(l_param, ctypes.POINTER(self.KBDLLHOOKSTRUCT)).contents
-        if info.flags & self.LLKHF_INJECTED:
-            return self._call_next_keyboard(n_code, w_param, l_param)
-
         vk = int(info.vkCode)
         is_down = w_param in (self.WM_KEYDOWN, self.WM_SYSKEYDOWN)
         is_up = w_param in (self.WM_KEYUP, self.WM_SYSKEYUP)
+        flags = int(info.flags)
+        extra_info = int(info.dwExtraInfo)
 
-        if is_down:
-            if vk in self.MODIFIER_KEYS:
-                self._physical_modifiers.add(vk)
-                self._physical_mod_times[vk] = time.monotonic()
-            was_pressed = vk in self._pressed_vks
-            self._pressed_vks.add(vk)
-            if was_pressed:
-                return 1 if vk in self._suppressed_keyups else self._call_next_keyboard(n_code, w_param, l_param)
-            if self.keyboard_enabled:
-                if self._match_hotkey(vk):
-                    self._suppressed_keyups.add(vk)
-                    return 1
-                if self._match_key_mapping(vk):
-                    self._suppressed_keyups.add(vk)
-                    return 1
-        elif is_up:
-            if vk in self.MODIFIER_KEYS:
-                self._physical_modifiers.discard(vk)
-                self._physical_mod_times.pop(vk, None)
-            self._pressed_vks.discard(vk)
-            self._release_active_triggers(vk)
-            if vk in self.MODIFIER_KEYS:
-                self._clear_chord_state()
-            if vk in self._suppressed_keyups:
-                self._suppressed_keyups.discard(vk)
-                return 1
+        if flags & self.LLKHF_INJECTED:
+            source = "bindx" if extra_info == BINDX_EXTRA_INFO else "injected"
+            with self._lock:
+                self._append_event_log_locked(
+                    vk, w_param, flags, extra_info, source,
+                    "injected_pass", self._physical_modifiers,
+                )
+            return self._call_next_keyboard(n_code, w_param, l_param)
 
+        suppress = False
+        action = "pass"
+        detail = ""
+        with self._lock:
+            modifiers = frozenset(self._physical_modifiers)
+            if is_down:
+                if vk in self.MODIFIER_KEYS:
+                    self._physical_modifiers.add(vk)
+                    modifiers = frozenset(self._physical_modifiers)
+                was_pressed = vk in self._pressed_vks
+                self._pressed_vks.add(vk)
+                if was_pressed:
+                    suppress = vk in self._suppressed_keyups
+                    action = "repeat_suppressed" if suppress else "repeat_pass"
+                elif self.keyboard_enabled:
+                    if self._match_hotkey(vk):
+                        self._suppressed_keyups.add(vk)
+                        suppress = True
+                        action = "hotkey_suppressed"
+                        detail = self.last_event
+                    elif self._match_key_mapping(vk):
+                        self._suppressed_keyups.add(vk)
+                        suppress = True
+                        action = "mapping_suppressed"
+                        detail = self.last_event
+            elif is_up:
+                if vk in self.MODIFIER_KEYS:
+                    self._physical_modifiers.discard(vk)
+                    modifiers = frozenset(self._physical_modifiers)
+                self._pressed_vks.discard(vk)
+                self._release_active_triggers(vk)
+                if vk in self.MODIFIER_KEYS:
+                    self._clear_chord_state()
+                if vk in self._suppressed_keyups:
+                    self._suppressed_keyups.discard(vk)
+                    suppress = True
+                    action = "keyup_suppressed"
+                else:
+                    action = "keyup_pass"
+            else:
+                action = "unknown_pass"
+
+            self._append_event_log_locked(
+                vk, w_param, flags, extra_info, "physical", action,
+                modifiers, detail,
+            )
+
+        if suppress:
+            return 1
         return self._call_next_keyboard(n_code, w_param, l_param)
 
     def _clear_chord_state(self):
@@ -510,65 +639,6 @@ class TriggerEngine:
         # A2: 保留仍按住的键的抑制记录，避免组合状态清除后
         # 被抑制键的物理 key-up 穿透
         self._suppressed_keyups = {vk for vk in self._suppressed_keyups if vk in self._pressed_vks}
-
-    def _effective_modifier_vks(self, now):
-        """双源共识计算当前真实按住的修饰键 VK 集合，并顺带清理陈旧状态。
-
-        一个修饰键必须"物理事件跟踪"与"GetAsyncKeyState"同时确认才算按住：
-        - GetAsyncKeyState 会被注入按键事件污染（鼠标侧键映射注入的 Ctrl、
-          输出时临时抬起/恢复物理按住的修饰键等），单独用它会把注入的
-          修饰键误判为"用户按住"——侧键点一下，随后按单个字母就匹配上
-          CTRL+ALT+A 之类热键，字母键被吞掉、目标应用被拉起抢走焦点；
-        - 物理事件跟踪在漏掉 keyup 时（钩子卡顿、看门狗重装、UAC 安全桌面
-          等）会残留"已松开但仍记录为按住"的幽灵修饰键——热键随机误触发，
-          输入法组合因焦点被抢而中断（中文输入突然变英文）。
-        两者不一致且物理按下已超出宽限期时，清理物理残留，保证漏 keyup
-        的幽灵状态约 150ms 内自愈，而不是永久存在。
-        """
-        if self._lift_expires:
-            self._lift_expires = {
-                vk: exp for vk, exp in self._lift_expires.items() if exp > now
-            }
-        user32 = self._user32
-        held = set()
-        for group in self.MODIFIER_GROUPS:
-            phys = self._physical_modifiers & group
-            if not phys:
-                continue
-            # 注入抬起/恢复窗口内异步状态不可靠：以物理跟踪为准
-            if any(now < self._lift_expires.get(vk, 0.0) for vk in phys):
-                held.update(phys)
-                continue
-            if user32 is None:
-                held.update(phys)
-                continue
-            async_down = False
-            for candidate in group:
-                try:
-                    if user32.GetAsyncKeyState(candidate) & 0x8000:
-                        async_down = True
-                        break
-                except Exception:
-                    async_down = True
-                    break
-            if async_down:
-                held.update(phys)
-                continue
-            # 异步已松开：物理按下仍在宽限期内可能是队列延迟，暂时保留；
-            # 超过宽限期则基本可断定是漏掉 keyup 的残留，清理物理状态
-            stale = True
-            for vk in phys:
-                t = self._physical_mod_times.get(vk)
-                if t is None or now - t < self._STALE_GRACE_SECONDS:
-                    stale = False
-                    break
-            if stale:
-                for vk in phys:
-                    self._physical_modifiers.discard(vk)
-                    self._physical_mod_times.pop(vk, None)
-            else:
-                held.update(phys)
-        return held
 
     def _mouse_proc(self, n_code, w_param, l_param):
         started = time.monotonic()
@@ -582,7 +652,6 @@ class TriggerEngine:
             return self._call_next_mouse(n_code, w_param, l_param)
 
         if w_param in (self.WM_MOUSEWHEEL, self.WM_MOUSEHWHEEL):
-            self._clear_stale_modifier_state()
             return self._call_next_mouse(n_code, w_param, l_param)
 
         info = ctypes.cast(l_param, ctypes.POINTER(self.MSLLHOOKSTRUCT)).contents
@@ -619,7 +688,29 @@ class TriggerEngine:
         return self._user32.CallNextHookEx(None, n_code, w_param, l_param)
 
     def _current_modifiers(self):
-        eff = self._effective_modifier_vks(time.monotonic())
+        with self._lock:
+            # Physical event tracking is authoritative for BindX-injected state,
+            # but hotkeys still require an async-state confirmation. This removes
+            # missed-keyup residue before a normal letter can trigger Ctrl+Alt apps.
+            eff = set(self._physical_modifiers)
+            user32 = self._user32
+            if user32 is not None:
+                for group in self.MODIFIER_GROUPS:
+                    physical = eff & group
+                    if not physical:
+                        continue
+                    confirmed = False
+                    for vk in group:
+                        try:
+                            if int(user32.GetAsyncKeyState(vk)) & 0x8000:
+                                confirmed = True
+                                break
+                        except Exception:
+                            confirmed = True
+                            break
+                    if not confirmed:
+                        self._physical_modifiers.difference_update(group)
+                        eff.difference_update(group)
         modifiers = 0
         if eff & self.CTRL_KEYS:
             modifiers |= _hk.MOD_CONTROL
@@ -631,8 +722,41 @@ class TriggerEngine:
             modifiers |= _hk.MOD_WIN
         return modifiers
 
+    def _ime_composition_active(self):
+        user32 = self._user32
+        imm32 = self._imm32
+        if user32 is None or imm32 is None:
+            return False
+
+        try:
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False
+            thread_id = int(user32.GetWindowThreadProcessId(hwnd, None))
+            if not thread_id:
+                return False
+            info = GUITHREADINFO()
+            info.cbSize = ctypes.sizeof(GUITHREADINFO)
+            if not user32.GetGUIThreadInfo(thread_id, ctypes.byref(info)):
+                return False
+            focus = info.hwndFocus or hwnd
+            himc = imm32.ImmGetContext(focus)
+            if not himc:
+                return False
+            try:
+                size = int(
+                    imm32.ImmGetCompositionStringW(himc, GCS_COMPSTR, None, 0)
+                )
+                return size > 0
+            finally:
+                imm32.ImmReleaseContext(focus, himc)
+        except Exception:
+            return False
+
     def _match_hotkey(self, vk):
         if vk in self.MODIFIER_KEYS:
+            return False
+        if self._ime_composition_active():
             return False
         current_mods = self._current_modifiers()
         for entry in self.hotkey_manager.entries:
@@ -655,6 +779,8 @@ class TriggerEngine:
 
     def _match_key_mapping(self, vk):
         if vk in self.MODIFIER_KEYS:
+            return False
+        if self._ime_composition_active():
             return False
         current_mods = self._current_modifiers()
         for idx, mapping in enumerate(self.mouse_config.get("mappings", [])):
@@ -679,24 +805,12 @@ class TriggerEngine:
         return False
 
     def _held_modifier_names(self):
-        # 只依据物理按键跟踪，避免把注入事件的逻辑状态误当成用户真实按键
-        held = frozenset()
-        for _ in range(3):
-            try:
-                held = frozenset(self._physical_modifiers)
-                break
-            except RuntimeError:
-                continue
+        with self._lock:
+            held = frozenset(self._physical_modifiers)
         return [
             name for vk, name in self.MODIFIER_KEY_NAMES.items()
             if vk in held
         ]
-
-    def _clear_stale_modifier_state(self):
-        # 只校正内部状态。绝不能在这里注入修饰键释放——用户可能正真实地
-        # 按住 Ctrl/Alt/Shift（例如 Ctrl+滚轮缩放），注入 key-up 会把这些
-        # 物理按住的键"杀死"，导致后续 Ctrl+C 之类组合退化成纯字母键。
-        self._effective_modifier_vks(time.monotonic())
 
     def _release_active_triggers(self, vk):
         for entry in self.hotkey_manager.entries:
@@ -774,79 +888,75 @@ class TriggerEngine:
     def _modifier_group(cls, name):
         return cls._MODIFIER_GROUP_ALIASES.get(str(name).strip().lower())
 
-    def _note_lift(self, name):
-        vk = self._MODIFIER_NAME_VK.get(name)
-        if vk is not None:
-            self._lift_expires[vk] = time.monotonic() + self._LIFT_WINDOW_SECONDS
+    def _output_key_vk(self, name):
+        return self.OUTPUT_MODIFIER_VKS.get(name) or self._key_name_to_vk(name)
 
-    def _forget_lift(self, name):
-        vk = self._MODIFIER_NAME_VK.get(name)
-        if vk is not None:
-            self._lift_expires.pop(vk, None)
+    def _inject_key(self, name, down):
+        vk = self._output_key_vk(name)
+        if vk is None:
+            raise ValueError(f"Unsupported output key: {name}")
+        user32 = self._user32
+        if user32 is None:
+            raise RuntimeError("Trigger engine is not running")
+
+        scan = int(user32.MapVirtualKeyW(vk, 0))
+        flags = self.KEYEVENTF_KEYUP if down is False else 0
+        item = INPUT()
+        item.type = self.INPUT_KEYBOARD
+        item.union.ki = KEYBDINPUT(vk, scan, flags, 0, BINDX_EXTRA_INFO)
+        array = (INPUT * 1)(item)
+        sent = int(user32.SendInput(1, array, ctypes.sizeof(INPUT)))
+        if sent != 1:
+            raise RuntimeError(f"SendInput failed for {name}")
+        return True
 
     def _do_output(self, keys):
         output = self._normalize_output_keys(keys)
         if not output:
             return
+        if self._stop_event.wait(self._output_delay_ms / 1000.0):
+            return
+        if self._stop_event.is_set():
+            return
+
+        output_mod_groups = {
+            group for group in (
+                self._modifier_group(key) for key in output
+            ) if group
+        }
         pressed = []
         lifted = []
-        # 输出组合包含的修饰键组（如 ctrl/shift/alt/win）
-        output_mod_groups = set()
-        for k in output:
-            group = self._modifier_group(k)
-            if group:
-                output_mod_groups.add(group)
-        # 用户当前物理按住的修饰键组
-        held_mod_groups = set()
-        for n in self._held_modifier_names():
-            group = self._modifier_group(n)
-            if group:
-                held_mod_groups.add(group)
-        try:
-            time.sleep(self._output_delay_ms / 1000.0)
+        # 注入序列与物理事件处理共用一把锁：读取“用户仍按住”和发送
+        # SendInput 之间不可能插入物理 key-up，避免恢复出卡住的修饰键。
+        with self._lock:
+            held_names = set(self._held_modifier_names())
+            held_mod_groups = {
+                group for group in (
+                    self._modifier_group(name) for name in held_names
+                ) if group
+            }
             self._log_injection(output)
-            # 用户物理按住、但不在输出组合中的修饰键先临时抬起，避免污染输出组合；
-            # 输出组合里包含的修饰键保持按下（目标应用能拿到正确的修饰键状态，
-            # 修复 Ctrl+C 被注入成纯字母 c 之类的问题），输出完成后再恢复多抬起的键。
-            if self._restore_held_modifiers:
-                for name in self._held_modifier_names():
-                    if self._modifier_group(name) in output_mod_groups:
+            try:
+                if self._restore_held_modifiers:
+                    for name in sorted(held_names):
+                        if self._modifier_group(name) in output_mod_groups:
+                            continue
+                        if self._inject_key(name, False):
+                            lifted.append(name)
+                for key in output:
+                    group = self._modifier_group(key)
+                    if group and group in held_mod_groups:
                         continue
-                    self._note_lift(name)
-                    try:
-                        kb.release(name)
-                        lifted.append(name)
-                    except Exception:
-                        self._forget_lift(name)
-            for key in output:
-                group = self._modifier_group(key)
-                if group and group in held_mod_groups:
-                    # 用户已物理按住的修饰键不重复注入
-                    continue
-                kb.press(key)
-                pressed.append(key)
-            for key in reversed(pressed):
-                kb.release(key)
-        finally:
-            for key in reversed(pressed):
-                try:
-                    kb.release(key)
-                except Exception:
-                    pass
-            if lifted:
-                still_held = set(self._held_modifier_names())
-                for name in reversed(lifted):
-                    if name not in still_held:
-                        # 用户已物理松开该修饰键：无需恢复，关闭注入窗口
-                        self._forget_lift(name)
-                        continue
-                    try:
-                        kb.press(name)
-                    except Exception:
-                        pass
-                    # 恢复按下已发出：系统处理完后异步状态才收敛，
-                    # 延长窗口避免收敛期间共识逻辑误判
-                    self._note_lift(name)
+                    if self._inject_key(key, True):
+                        pressed.append(key)
+            finally:
+                for key in reversed(pressed):
+                    self._inject_key(key, False)
+                if lifted:
+                    still_held = set(self._held_modifier_names())
+                    for name in reversed(lifted):
+                        if name in still_held:
+                            self._inject_key(name, True)
 
     def _log_injection(self, keys):
         # 记录一次注入事件，供检查器在短窗口内匹配
@@ -859,7 +969,7 @@ class TriggerEngine:
             n = str(name).strip().lower()
             if n:
                 names.add(n)
-            vk = self._key_name_to_vk(n)
+            vk = self._output_key_vk(n)
             if vk is not None:
                 vks.add(vk)
         if not names and not vks:
