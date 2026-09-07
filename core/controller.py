@@ -6,6 +6,8 @@ HotKeyManager 仍负责热键配置 CRUD 和 AppController 动作；TriggerEngin
 WH_KEYBOARD_LL / WH_MOUSE_LL 低层 hook、触发匹配与 hook 自恢复。
 """
 
+import threading
+
 from . import config_proxy, config_store, startup_manager
 from .trigger_engine import TriggerEngine
 
@@ -52,13 +54,41 @@ class BindXController:
             entry = self.hotkey_manager.entry_map.get(entry_id)
             if not entry or not entry.get("enabled", True):
                 continue
-            try:
-                if hasattr(entry["controller"], "callback"):
-                    entry["controller"].callback()
-                else:
-                    entry["controller"].toggle()
-            except Exception as error:
-                entry["last_error"] = str(error)
+            controller = entry.get("controller")
+            if controller is None:
+                continue
+            # BindX 自身的热键回调（如显示/隐藏主窗口）是 Tk 操作，
+            # 必须在 Tk 主线程执行；其余 AppController 动作（激活/隐藏/
+            # 启动目标窗口）是慢速 Win32 跨进程调用，在主线程里执行会
+            # 长时间占用 GIL，饿死 hook 线程（输入卡顿的根源之一），
+            # 放到后台线程并加 in-flight 保护避免同一动作并发。
+            if hasattr(controller, "callback"):
+                self._invoke_hotkey_action(entry)
+            else:
+                self._spawn_hotkey_action(entry)
+
+    def _invoke_hotkey_action(self, entry):
+        try:
+            entry["controller"].callback()
+        except Exception as error:
+            entry["last_error"] = str(error)
+
+    def _spawn_hotkey_action(self, entry):
+        if entry.get("_action_inflight"):
+            return
+        entry["_action_inflight"] = True
+        thread = threading.Thread(
+            target=self._run_hotkey_action, args=(entry,), daemon=True
+        )
+        thread.start()
+
+    def _run_hotkey_action(self, entry):
+        try:
+            entry["controller"].toggle()
+        except Exception as error:
+            entry["last_error"] = str(error)
+        finally:
+            entry["_action_inflight"] = False
 
     def _save_engine_state(self):
         config_store.save_app_state(self.app_state)

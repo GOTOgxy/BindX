@@ -2,8 +2,10 @@
 
 import ctypes
 import os
+import queue
 import threading
 import time
+import traceback
 from collections import deque
 from ctypes import wintypes
 
@@ -13,6 +15,13 @@ _hk = config_proxy.hk_module()
 
 BINDX_EXTRA_INFO = 0x42494E58
 GCS_COMPSTR = 0x0008
+
+
+def _tb_text():
+    # 取当前正在处理的异常的 traceback 文本。
+    # 钩子回调的异常处理路径依赖它；旧版缺失时会在 except 块里
+    # 再抛 NameError，异常直接传进原生 hook 派发（行为未定义）。
+    return traceback.format_exc()
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -73,6 +82,22 @@ class GUITHREADINFO(ctypes.Structure):
     ]
 
 
+class _RunState:
+    """Per-run 输出队列。
+
+    僵尸线程（卡在阻塞调用里迟迟不结束的旧 _run）与新 _run
+    各自持有独立的队列/代际号，僵尸线程退出时只清理自己的
+    局部状态，永远不会覆盖、清空或消费新 run 的队列与标志。
+    """
+
+    __slots__ = ("gen", "queue", "queue_lock")
+
+    def __init__(self, gen):
+        self.gen = gen
+        self.queue = []
+        self.queue_lock = threading.Lock()
+
+
 class TriggerEngine:
     """Unified low-level keyboard/mouse trigger engine for BindX."""
 
@@ -129,6 +154,13 @@ class TriggerEngine:
         VK_LWIN: "left windows",
         VK_RWIN: "right windows",
     }
+    # 可被 GetAsyncKeyState 单独查询的具体修饰键 VK
+    # （不含通用 0x10/0x11/0x12）。用于快速"同进程"物理按键状态
+    # 对账，绝不跨进程。
+    SPECIFIC_MODIFIER_VKS = (
+        VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL,
+        VK_LMENU, VK_RMENU, VK_LWIN, VK_RWIN,
+    )
 
     # 修饰键组名归一化：具体名（left ctrl 等）与通用名（ctrl 等）都映射到同一个组，
     # 用于判断"用户物理按住的修饰键"与"输出组合中的修饰键"是否属于同一组
@@ -275,8 +307,6 @@ class TriggerEngine:
         # A1: 线程停止时的按键状态快照，下次启动恢复
         self._snap_pressed = None
         self._snap_suppressed = None
-        # A4: 输出队列与 worker 线程（串行化输出）
-        self._output_queue = []
         # 钩子回调延迟统计
         self._slow_hook_count = 0
         # B5: 注入事件日志（供按键检查器标注 BindX 注入）
@@ -284,18 +314,42 @@ class TriggerEngine:
         self._injection_log_lock = threading.Lock()
         # 键盘事件诊断日志：只保留最近事件，用于定位吞键/增键
         self._event_log = deque(maxlen=self.EVENT_LOG_SIZE)
+        # per-run 状态：代际号 + 私有输出队列（僵尸线程无法覆盖新 run）
+        self._gen = 0
+        self._run_state = None
+        self._keyboard_hook = None
+        self._mouse_hook = None
+        self._output_worker = None
+        # IME 状态：钩子回调只读该标志（回调内不做跨进程调用），
+        # 由 _ime_monitor 后台线程约 100ms 刷新一次
+        self._ime_composing = False
+        self._ime_monitor = None
+        self._ime_monitor_gen = 0
+        self._ime_monitor_heartbeat = 0.0
+        # 诊断日志：hook 线程只入队，专用 writer 线程做文件 I/O，
+        # 磁盘阻塞不会拖住低级钩子（阻塞超时会令系统禁用钩子）
+        self._diag_queue = queue.Queue()
+        self._diag_writer = None
+        # 修复：旧版只在首次 update_mouse_config 时才建索引，
+        # 在此之前按键/鼠标事件会在钩子内抛 AttributeError 并被静默吞掉
+        self._rebuild_mouse_index()
 
     def set_enabled(self, keyboard_enabled=None, mouse_enabled=None):
-        with self._lock:
-            if keyboard_enabled is not None:
+        if keyboard_enabled is not None:
+            with self._lock:
                 self.keyboard_enabled = bool(keyboard_enabled)
-            if mouse_enabled is not None:
+        if mouse_enabled is not None:
+            with self._lock:
                 self.mouse_enabled = bool(mouse_enabled)
+        with self._lock:
             self._sync_hotkey_status()
-            if self.keyboard_enabled or self.mouse_enabled:
-                self._ensure_running()
-            else:
-                self._stop_thread()
+            desired = self.keyboard_enabled or self.mouse_enabled
+        # 启/停在锁外进行：_stop_thread 需要 join 钩子线程，而钩子回调
+        # 又会获取 self._lock，持锁等待会等死自己（也会触发低级钩子超时）。
+        if desired:
+            self._ensure_running()
+        else:
+            self._stop_thread()
 
     def update_mouse_config(self, config):
         with self._lock:
@@ -335,10 +389,11 @@ class TriggerEngine:
         return exported
 
     def reinstall_hooks(self):
+        self._stop_thread()
         with self._lock:
-            self._stop_thread()
-            if self.keyboard_enabled or self.mouse_enabled:
-                self._ensure_running()
+            desired = self.keyboard_enabled or self.mouse_enabled
+        if desired:
+            self._ensure_running()
 
     def shutdown(self):
         self._watchdog_stop.set()
@@ -346,26 +401,47 @@ class TriggerEngine:
         thread = self._watchdog_thread
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=1.0)
+        # 停止诊断 writer：放入哨兵，等待其把剩余日志落盘后退出
+        try:
+            self._diag_queue.put(None)
+        except Exception:
+            pass
+        writer = self._diag_writer
+        if writer and writer.is_alive() and writer is not threading.current_thread():
+            writer.join(timeout=1.0)
+        self._diag_writer = None
 
     def _ensure_running(self):
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        if not self._watchdog_thread or not self._watchdog_thread.is_alive():
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._start_diag_writer()
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+            watchdog_needed = (
+                not self._watchdog_thread or not self._watchdog_thread.is_alive()
+            )
+        if watchdog_needed:
             self._watchdog_stop.clear()
-            self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
+            self._watchdog_thread = threading.Thread(
+                target=self._watchdog_loop, daemon=True
+            )
             self._watchdog_thread.start()
 
     def _stop_thread(self):
+        # 使当前 run 与 IME 监控失效（代际号让旧线程自行退出），
+        # 之后僵尸 _run 再也无法修改任何共享状态。
+        self._gen += 1
+        self._ime_monitor_gen += 1
+        self._ime_composing = False
         self._stop_event.set()
-        thread = self._thread
-        if thread and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=1.0)
-        if not thread or not thread.is_alive():
+        thread = None
+        with self._lock:
+            thread = self._thread
             self._thread = None
             self.running = False
+            self._run_state = None
             self._output_worker = None
             # A1: 快照当前按键状态，钩子重装后恢复
             self._snap_pressed = set(self._pressed_vks)
@@ -379,24 +455,65 @@ class TriggerEngine:
             self._suppressed_keyups.clear()
             self._suppressed_mouse_buttons.clear()
             self._sync_hotkey_status()
+        # join 必须在锁外：钩子回调也会获取 self._lock，持锁等待
+        # 会让旧线程超时而成为僵尸（同时触发低级钩子超时）。
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                # 僵尸：卡在阻塞调用里（旧版钩子回调内有跨进程 IME
+                # 查询，可卡数小时）。立即摘掉它的钩子，让旧线程
+                # 不再接收事件；僵尸最终醒来时只做局部清理
+                # （代际号保护），不会碰新 run。
+                self._diag_log("hook thread stuck; forced unhook (zombie will self-clean)")
+                self._force_unhook()
+
+    def _force_unhook(self):
+        with self._lock:
+            user32 = self._user32
+            keyboard_hook = self._keyboard_hook
+            mouse_hook = self._mouse_hook
+            self._keyboard_hook = None
+            self._mouse_hook = None
+        if not keyboard_hook and not mouse_hook:
+            return
+        if user32 is None:
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+            user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+        for handle in (keyboard_hook, mouse_hook):
+            if handle:
+                try:
+                    user32.UnhookWindowsHookEx(handle)
+                except Exception:
+                    pass
 
     def _watchdog_loop(self):
         while not self._watchdog_stop.wait(2.0):
-            with self._lock:
-                desired = self.keyboard_enabled or self.mouse_enabled
-                if not desired:
-                    continue
-                stale = self.running and self.heartbeat and time.monotonic() - self.heartbeat > 5.0
-                dead = not self._thread or not self._thread.is_alive()
-                if dead or stale:
-                    self.last_error = "Hook watchdog restarted trigger engine"
-                    age = (time.monotonic() - self.heartbeat) if self.heartbeat else -1.0
-                    self._diag_log(
-                        f"watchdog restarted hook thread: dead={dead}, stale={stale}, "
-                        f"running={self.running}, heartbeat_age={age:.2f}s"
+            try:
+                restart_needed = False
+                with self._lock:
+                    desired = self.keyboard_enabled or self.mouse_enabled
+                    if not desired:
+                        continue
+                    stale = bool(
+                        self.running and self.heartbeat
+                        and time.monotonic() - self.heartbeat > 5.0
                     )
+                    dead = not self._thread or not self._thread.is_alive()
+                    if dead or stale:
+                        restart_needed = True
+                        self.last_error = "Hook watchdog restarted trigger engine"
+                        age = (time.monotonic() - self.heartbeat) if self.heartbeat else -1.0
+                        self._diag_log(
+                            f"watchdog restarted hook thread: dead={dead}, stale={stale}, "
+                            f"running={self.running}, heartbeat_age={age:.2f}s"
+                        )
+                # _stop_thread 可能 join 至多 1 秒，不能在持锁时做
+                if restart_needed:
                     self._stop_thread()
                     self._ensure_running()
+            except Exception:
+                self._diag_log("watchdog exception:\n" + _tb_text())
 
     def _sync_hotkey_status(self):
         active = bool(self.keyboard_enabled and self.running)
@@ -407,6 +524,10 @@ class TriggerEngine:
                 entry["last_error"] = None
 
     def _run(self):
+        # 本次 run 的代际号与私有停止标志：被 _stop_thread 判为僵尸的
+        # run 不再与新 run 共享 _stop_event / _run_state。
+        gen = self._gen
+        run_stop = threading.Event()
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         imm32 = ctypes.WinDLL("imm32", use_last_error=True)
@@ -472,19 +593,22 @@ class TriggerEngine:
 
         if not keyboard_hook or not mouse_hook:
             self.last_error = f"SetWindowsHookExW failed: {ctypes.get_last_error()}"
-            if keyboard_hook:
-                user32.UnhookWindowsHookEx(keyboard_hook)
-            if mouse_hook:
-                user32.UnhookWindowsHookEx(mouse_hook)
-            self.running = False
+            self._finish_run(user32, keyboard_hook, mouse_hook, run_stop, gen)
             self._sync_hotkey_status()
             return
 
+        with self._lock:
+            self._keyboard_hook = keyboard_hook
+            self._mouse_hook = mouse_hook
+            self._run_state = _RunState(gen)
         self.running = True
         self.last_error = None
         self._slow_hook_count = 0
+        # 种子物理修饰键状态：只查具体 VK（通用 VK_CONTROL/SHIFT/MENU
+        # 与具体 VK 同组、状态相同；若把通用 VK 也存进来，会留下
+        # 永远清不掉的幽灵状态）
         self._physical_modifiers = {
-            vk for vk in self.MODIFIER_KEYS
+            vk for vk in self.SPECIFIC_MODIFIER_VKS
             if user32.GetAsyncKeyState(vk) & 0x8000
         }
         # A1: 恢复上次停止前的按键状态快照，过滤已不再物理按住的键
@@ -502,16 +626,29 @@ class TriggerEngine:
             }
         try:
             self._sync_hotkey_status()
-            # A4: 启动输出队列 worker 线程
-            self._output_worker = threading.Thread(target=self._output_worker_loop, daemon=True)
-            self._output_worker.start()
         except Exception:
             self._diag_log("hook startup exception:\n" + _tb_text())
             self.last_error = "Hook startup crashed (see data/bindx_hook_error.log)"
-            user32.UnhookWindowsHookEx(keyboard_hook)
-            user32.UnhookWindowsHookEx(mouse_hook)
-            self.running = False
+            self._finish_run(user32, keyboard_hook, mouse_hook, run_stop, gen)
             return
+        # A4: 启动输出 worker（本次 run 的私有队列）
+        with self._lock:
+            state = self._run_state
+        worker = None
+        if state is not None:
+            worker = threading.Thread(
+                target=self._output_worker_loop, args=(run_stop, state), daemon=True
+            )
+            with self._lock:
+                self._output_worker = worker
+            worker.start()
+        # IME 状态监控：跨进程查询绝不能出现在钩子回调里
+        # （回调超时会被系统禁用钩子——那是滚轮失效/按键错乱的根源），
+        # 由后台线程约 100ms 刷新一次 _ime_composing。
+        self._ime_composing = False
+        self._ime_monitor_heartbeat = time.monotonic()
+        self._ime_monitor = threading.Thread(target=self._ime_monitor_loop, daemon=True)
+        self._ime_monitor.start()
         # user32 导出的是 MsgWaitForMultipleObjects（没有 W/Ex 后缀变体，
         # 注意别写成 MsgWaitForMultipleObjectsW——该符号不存在）
         user32.MsgWaitForMultipleObjects.argtypes = [
@@ -523,7 +660,9 @@ class TriggerEngine:
         msg = wintypes.MSG()
 
         try:
-            while not self._stop_event.is_set():
+            # gen 自检：僵尸 run 被 _stop_thread 失效（代际号+1）后，
+            # 从阻塞调用里醒来就立即退出，不再触碰新 run 的状态。
+            while gen == self._gen and not run_stop.is_set() and not self._stop_event.is_set():
                 # 旧实现是 PeekMessage + sleep(10ms)：高频鼠标事件最多要等
                 # 10ms 才被派发，移动会成批出现，表现为明显卡顿。
                 # MsgWaitForMultipleObjectsW 一有输入立即唤醒，
@@ -538,35 +677,65 @@ class TriggerEngine:
                     self.last_error = "Hook pump crashed (see data/bindx_hook_error.log)"
                     break
                 self.heartbeat = time.monotonic()
+                # IME 监控自愈：心跳超过 3 秒未更新说明它很可能卡在
+                # 跨进程调用里，作废旧代际并起新线程（旧线程醒来后
+                # 自行退出）。
+                if (
+                    self._ime_monitor_heartbeat
+                    and time.monotonic() - self._ime_monitor_heartbeat > 3.0
+                ):
+                    self._ime_monitor_gen += 1
+                    self._ime_monitor = threading.Thread(
+                        target=self._ime_monitor_loop, daemon=True
+                    )
+                    self._ime_monitor.start()
         finally:
-            user32.UnhookWindowsHookEx(keyboard_hook)
-            user32.UnhookWindowsHookEx(mouse_hook)
-            self.running = False
-            # A4: 排空输出队列并等待 worker 退出
-            with self._queue_lock:
-                self._output_queue.clear()
-            worker = self._output_worker
-            self._output_worker = None
+            self._finish_run(user32, keyboard_hook, mouse_hook, run_stop, gen)
             if worker is not None and worker is not threading.current_thread():
                 worker.join(timeout=1.0)
-            self._sync_hotkey_status()
+            if gen == self._gen:
+                self._sync_hotkey_status()
 
-    def _output_worker_loop(self):
-        while True:
-            if self._stop_event.is_set():
-                break
+    def _finish_run(self, user32, keyboard_hook, mouse_hook, run_stop, gen):
+        """卸载钩子并（仅当本 run 仍是当前）清理共享状态。
+
+        僵尸 run（被 _stop_thread 判失效）只做局部卸载，绝不碰
+        新 run 的队列、标志与线程。
+        """
+        run_stop.set()
+        for handle in (keyboard_hook, mouse_hook):
+            if handle:
+                try:
+                    user32.UnhookWindowsHookEx(handle)
+                except Exception:
+                    pass
+        if gen == self._gen:
+            with self._lock:
+                self._keyboard_hook = None
+                self._mouse_hook = None
+                self.running = False
+                self._run_state = None
+                self._output_worker = None
+            self._ime_monitor_gen += 1
+
+    def _output_worker_loop(self, run_stop, state):
+        # 只处理所属 run 的输出队列；run 结束（run_stop）即自行退出，
+        # 僵尸 run 的 worker 不会触碰新 run 的队列。
+        if state is None:
+            return
+        while not run_stop.is_set() and not self._stop_event.is_set():
             keys = None
-            with self._queue_lock:
-                if self._output_queue:
-                    keys = self._output_queue.pop(0)
+            with state.queue_lock:
+                if state.queue:
+                    keys = state.queue.pop(0)
             if keys is None:
-                if self._stop_event.wait(0.005):
+                if run_stop.wait(0.005):
                     break
                 continue
             try:
-                self._do_output(keys)
+                self._do_output(keys, run_stop)
             except Exception:
-                pass
+                self._diag_log("output worker exception:\n" + _tb_text())
 
     def _note_hook_latency(self, started):
         if time.monotonic() - started > 0.1:
@@ -575,16 +744,44 @@ class TriggerEngine:
                 self.last_error = "Hook callback is slow (over 100ms); input may feel laggy"
 
     def _diag_log(self, message):
-        # 诊断日志：pythonw 没有控制台，hook 线程/回调/消息泵的异常绝不能静默。
-        # 统一追加到 data/bindx_hook_error.log 供事后排查。
+        # 诊断日志：pythonw 没有控制台，hook 线程/回调/消息泵的异常绝不能静默，
+        # 统一记录到 data/bindx_hook_error.log。
+        # hook 线程只入队、writer 线程落盘：文件 I/O 绝不能阻塞
+        # 低级钩子回调（阻塞超时会令系统禁用钩子）。
         try:
-            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            path = os.path.join(base, "data", "bindx_hook_error.log")
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(f"[{stamp}] {message}\n")
+            if self._diag_queue.qsize() >= 200:
+                return
+            self._diag_queue.put(f"[{stamp}] {message}")
+            self._start_diag_writer()
         except Exception:
             pass
+
+    def _start_diag_writer(self):
+        writer = self._diag_writer
+        if writer is None or not writer.is_alive():
+            self._diag_writer = threading.Thread(
+                target=self._diag_writer_loop, daemon=True
+            )
+            self._diag_writer.start()
+
+    def _diag_writer_loop(self):
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "bindx_hook_error.log",
+        )
+        while True:
+            try:
+                line = self._diag_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            try:
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except Exception:
+                pass
 
     def _keyboard_proc(self, n_code, w_param, l_param):
         started = time.monotonic()
@@ -643,6 +840,9 @@ class TriggerEngine:
             if is_down:
                 if vk in self.MODIFIER_KEYS:
                     self._physical_modifiers.add(vk)
+                    # 与系统实际物理状态对账（同进程快调用），
+                    # 漏掉的 key-up / 幽灵状态从此无法累积
+                    self._sync_modifier_state(exclude_vk=vk)
                     modifiers = frozenset(self._physical_modifiers)
                 was_pressed = vk in self._pressed_vks
                 self._pressed_vks.add(vk)
@@ -663,6 +863,10 @@ class TriggerEngine:
             elif is_up:
                 if vk in self.MODIFIER_KEYS:
                     self._physical_modifiers.discard(vk)
+                    # 旧版在这里调用不存在的 _sync_modifier_state，
+                    # 每个修饰键 key-up 都让回调抛异常（按键错乱/
+                    # 修饰键卡死的直接根源之一）
+                    self._sync_modifier_state(exclude_vk=vk)
                     modifiers = frozenset(self._physical_modifiers)
                 self._pressed_vks.discard(vk)
                 self._release_active_triggers(vk)
@@ -700,6 +904,37 @@ class TriggerEngine:
         self._suppressed_keyups = {vk for vk in self._suppressed_keyups if vk in self._pressed_vks}
         self._sync_modifier_state()
 
+    def _sync_modifier_state(self, exclude_vk=None):
+        """按系统物理按键状态对账 _physical_modifiers。
+
+        只用 GetAsyncKeyState（同进程快查询，无跨进程调用），在每次
+        物理修饰键 down/up 以及输出注入前调用。
+        exclude_vk 是当前正在处理事件的具体 VK：系统的异步状态可能
+        比物理事件晚几毫秒，该键既不剔除也不参与对账，避免把
+        "刚按下/刚松开"误判为幽灵或漏按。
+        """
+        user32 = self._user32
+        if user32 is None:
+            return
+        preserved = (
+            {exclude_vk}
+            if (exclude_vk is not None and exclude_vk in self._physical_modifiers)
+            else set()
+        )
+        live = set()
+        for vk in self.SPECIFIC_MODIFIER_VKS:
+            if vk == exclude_vk:
+                continue
+            try:
+                if int(user32.GetAsyncKeyState(vk)) & 0x8000:
+                    live.add(vk)
+            except Exception:
+                return
+        self._physical_modifiers.difference_update(self.SPECIFIC_MODIFIER_VKS)
+        self._physical_modifiers.update(preserved)
+        self._physical_modifiers.update(live)
+        self._pressed_vks.update(self._physical_modifiers)
+
     def _mouse_proc(self, n_code, w_param, l_param):
         started = time.monotonic()
         try:
@@ -735,8 +970,7 @@ class TriggerEngine:
                         continue
                 self._suppressed_mouse_buttons.add(btn)
                 self.last_event = f"Mouse {btn} -> {'+'.join(mapping.get('output', []))}"
-                with self._queue_lock:
-                    self._output_queue.append(list(mapping.get("output", [])))
+                self._enqueue_output(mapping.get("output", []))
                 return 1
             if w_param == up_msg and btn in self._suppressed_mouse_buttons:
                 self._suppressed_mouse_buttons.discard(btn)
@@ -756,18 +990,21 @@ class TriggerEngine:
             self._suppressed_mouse_buttons.discard(btn)
             return 1
 
-        if w_param in (self.WM_MOUSEWHEEL, self.WM_MOUSEHWHEEL):
-            # 滚轮不参与触发；顺手同步内部修饰键状态
-            # （新版 _sync_modifier_state 不再调用 GetAsyncKeyState，开销可忽略）。
-            self._sync_modifier_state()
-
         return self._call_next_mouse(n_code, w_param, l_param)
 
     def _trigger_mouse(self, btn, mapping):
         self._suppressed_mouse_buttons.add(btn)
         self.last_event = f"Mouse {btn} -> {'+'.join(mapping.get('output', []))}"
-        with self._queue_lock:
-            self._output_queue.append(list(mapping.get("output", [])))
+        self._enqueue_output(mapping.get("output", []))
+
+    def _enqueue_output(self, output):
+        # 把输出组合放入当前 run 的私有队列（worker 串行注入）；
+        # run 未激活（钩子未装/已停用）时直接丢弃。
+        state = self._run_state
+        if state is None:
+            return
+        with state.queue_lock:
+            state.queue.append(list(output))
 
     def _call_next_keyboard(self, n_code, w_param, l_param):
         if self._user32 is None:
@@ -814,6 +1051,29 @@ class TriggerEngine:
             modifiers |= _hk.MOD_WIN
         return modifiers
 
+    def _ime_monitor_loop(self):
+        # IME 组合状态查询涉及跨进程调用（GetForegroundWindow /
+        # GetGUIThreadInfo / ImmGetCompositionStringW），前台程序不响应时
+        # 可能阻塞很久。因此放在后台线程；钩子回调只读
+        # self._ime_composing。代际号让旧 run 的监控线程自行退出。
+        gen = self._ime_monitor_gen
+        while not self._stop_event.is_set():
+            if self._ime_monitor_gen != gen:
+                return
+            started = time.monotonic()
+            try:
+                composing = self._ime_composition_active()
+                if time.monotonic() - started > 1.0:
+                    # 单次查询超过 1 秒，结果已过时，视为"未组合"
+                    composing = False
+            except Exception:
+                composing = False
+            if self._ime_monitor_gen != gen:
+                return
+            self._ime_composing = composing
+            self._ime_monitor_heartbeat = time.monotonic()
+            self._stop_event.wait(0.1)
+
     def _ime_composition_active(self):
         user32 = self._user32
         imm32 = self._imm32
@@ -848,7 +1108,9 @@ class TriggerEngine:
     def _match_hotkey(self, vk):
         if vk in self.MODIFIER_KEYS:
             return False
-        if self._ime_composition_active():
+        # 只读后台监控线程刷新的标志；绝不能在这里做跨进程查询
+        # （回调超时 => 系统禁用钩子 => 滚轮失效/按键错乱）
+        if self._ime_composing:
             return False
         current_mods = self._current_modifiers()
         for entry in self.hotkey_manager.entries:
@@ -872,7 +1134,7 @@ class TriggerEngine:
     def _match_key_mapping(self, vk):
         if vk in self.MODIFIER_KEYS:
             return False
-        if self._ime_composition_active():
+        if self._ime_composing:
             return False
         current_mods = self._current_modifiers()
         # 使用预计算索引；旧实现每次 key-down 都对每个 mapping 现场
@@ -890,8 +1152,7 @@ class TriggerEngine:
             self._active_key_mappings.add(idx)
             self._active_key_mapping_times[idx] = time.monotonic()
             self.last_event = f"Key {'+'.join(mapping.get('trigger', []))} -> {'+'.join(mapping.get('output', []))}"
-            with self._queue_lock:
-                self._output_queue.append(list(mapping.get("output", [])))
+            self._enqueue_output(mapping.get("output", []))
             return True
         return False
 
@@ -1054,25 +1315,24 @@ class TriggerEngine:
             raise RuntimeError(f"SendInput failed for {name}")
         return True
 
-    def _do_output(self, keys):
+    def _do_output(self, keys, stop=None):
         output = self._normalize_output_keys(keys)
         if not output:
             return
-        if self._stop_event.wait(self._output_delay_ms / 1000.0):
+        stop = stop or self._stop_event
+        if stop.wait(self._output_delay_ms / 1000.0):
             return
-        if self._stop_event.is_set():
+        if stop.is_set() or self._stop_event.is_set():
             return
-
-        output_mod_groups = {
-            group for group in (
-                self._modifier_group(key) for key in output
-            ) if group
-        }
-        pressed = []
-        lifted = []
         # 注入序列与物理事件处理共用一把锁：读取“用户仍按住”和发送
-        # SendInput 之间不可能插入物理 key-up，避免恢复出卡住的修饰键。
+        # SendInput 之间不可能插入物理 key-up。
         with self._lock:
+            # 注入前与系统实际物理按键状态对账（同进程快调用）：
+            # 用户物理按住的修饰键原样保留 —— 绝不抬起、也绝不恢复
+            # 用户的物理修饰键。旧实现“先抬起再恢复”正是幻影
+            # Ctrl/Esc/Alt 闪烁、打断输入法、以及 Ctrl 卡死导致
+            # 滚轮变网页缩放的根源。
+            self._sync_modifier_state()
             held_names = set(self._held_modifier_names())
             held_mod_groups = {
                 group for group in (
@@ -1080,13 +1340,8 @@ class TriggerEngine:
                 ) if group
             }
             self._log_injection(output)
+            pressed = []
             try:
-                if self._restore_held_modifiers:
-                    for name in sorted(held_names):
-                        if self._modifier_group(name) in output_mod_groups:
-                            continue
-                        if self._inject_key(name, False):
-                            lifted.append(name)
                 for key in output:
                     group = self._modifier_group(key)
                     if group and group in held_mod_groups:
@@ -1096,11 +1351,6 @@ class TriggerEngine:
             finally:
                 for key in reversed(pressed):
                     self._inject_key(key, False)
-                if lifted:
-                    still_held = set(self._held_modifier_names())
-                    for name in reversed(lifted):
-                        if name in still_held:
-                            self._inject_key(name, True)
 
     def _log_injection(self, keys):
         # 记录一次注入事件，供检查器在短窗口内匹配

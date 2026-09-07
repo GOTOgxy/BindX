@@ -4,7 +4,6 @@ import ctypes
 import threading
 import time
 import unittest
-from unittest.mock import patch
 
 from core import trigger_engine as trigger_engine_module
 from core.trigger_engine import BINDX_EXTRA_INFO, TriggerEngine
@@ -115,8 +114,8 @@ class TriggerEngineTests(unittest.TestCase):
         self.engine._user32.down_vks.update(
             {self.engine.VK_LCONTROL, self.engine.VK_LMENU}
         )
-        with patch.object(self.engine, "_ime_composition_active", return_value=True):
-            self.assertEqual(self._key(ord("Q"), True), 0)
+        self.engine._ime_composing = True
+        self.assertEqual(self._key(ord("Q"), True), 0)
         self.assertEqual(self.engine.pop_hotkey_events(), [])
 
     def _capture_injection(self):
@@ -164,7 +163,6 @@ class TriggerEngineTests(unittest.TestCase):
         self.assertEqual(
             self.injected,
             [
-                ("left ctrl", False),
                 ("c", True),
                 ("c", False),
             ],
@@ -180,6 +178,19 @@ class TriggerEngineTests(unittest.TestCase):
         worker.join(timeout=1.0)
         self.assertFalse(worker.is_alive())
         self.assertEqual(self.injected, [])
+
+    def test_held_modifier_is_not_relifted_on_output(self):
+        self._capture_injection()
+        self.engine.set_output_options(delay_ms=0)
+        self.engine._user32.down_vks.add(self.engine.VK_LCONTROL)
+        self.engine._physical_modifiers.add(self.engine.VK_LCONTROL)
+        self.engine._do_output(["ctrl", "c"])
+        self.assertEqual(self.injected, [("c", True), ("c", False)])
+
+    def test_sync_modifier_state_clears_ghost(self):
+        self.engine._physical_modifiers.add(self.engine.VK_LCONTROL)
+        self.engine._sync_modifier_state()
+        self.assertEqual(self.engine._physical_modifiers, set())
 
 
 if __name__ == "__main__":
