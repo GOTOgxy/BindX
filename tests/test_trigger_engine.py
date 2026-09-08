@@ -69,6 +69,16 @@ class TriggerEngineTests(unittest.TestCase):
             "controller": None,
         }
 
+    def _bare_q_entry(self):
+        return {
+            "id": 1,
+            "hotkey": "Q",
+            "modifiers": 0,
+            "virtual_key": ord("Q"),
+            "enabled": True,
+            "controller": None,
+        }
+
     def test_unmatched_common_combinations_pass_through(self):
         cases = [
             (self.engine.VK_LCONTROL, ord("C")),
@@ -85,13 +95,25 @@ class TriggerEngineTests(unittest.TestCase):
                 self.assertEqual(self.engine.pop_hotkey_events(), [])
 
     def test_configured_hotkey_triggers_once_and_suppresses_keyup(self):
-        self.engine.hotkey_manager.entries = [self._ctrl_alt_q_entry()]
-        self.assertEqual(self._key(self.engine.VK_LCONTROL, True), 0)
-        self.assertEqual(self._key(self.engine.VK_LMENU, True), 0)
+        # 无修饰键热键由钩子独占处理
+        # （带修饰键热键走原生 RegisterHotKey，见下一条测试）
+        self.engine.hotkey_manager.entries = [self._bare_q_entry()]
         self.assertEqual(self._key(ord("Q"), True), 1)
         self.assertEqual(self._key(ord("Q"), True), 1)
         self.assertEqual(self._key(ord("Q"), False), 1)
         self.assertEqual(self.engine.pop_hotkey_events(), [1])
+        self.assertEqual(self.engine.pop_hotkey_events(), [])
+
+    def test_modifier_hotkey_ignored_by_hook(self):
+        # 带修饰键热键统一由原生 RegisterHotKey 处理；钩子若安装着，
+        # 必须原样放行这些按键，不得拦截/吞键/重复触发
+        self.engine.hotkey_manager.entries = [self._ctrl_alt_q_entry()]
+        self.assertEqual(self._key(self.engine.VK_LCONTROL, True), 0)
+        self.assertEqual(self._key(self.engine.VK_LMENU, True), 0)
+        self.assertEqual(self._key(ord("Q"), True), 0)
+        self.assertEqual(self._key(ord("Q"), False), 0)
+        self.assertEqual(self._key(self.engine.VK_LMENU, False), 0)
+        self.assertEqual(self._key(self.engine.VK_LCONTROL, False), 0)
         self.assertEqual(self.engine.pop_hotkey_events(), [])
 
     def test_modifier_keyup_immediately_clears_physical_state(self):
@@ -102,21 +124,23 @@ class TriggerEngineTests(unittest.TestCase):
         self.assertEqual(self.engine._current_modifiers(), 0)
 
     def test_ghost_modifier_state_does_not_trigger_hotkey(self):
-        self.engine.hotkey_manager.entries = [self._ctrl_alt_q_entry()]
-        self.engine._physical_modifiers.update(
-            {self.engine.VK_LCONTROL, self.engine.VK_LMENU}
-        )
+        # 物理按住修饰键时，无修饰键热键不得触发
+        self.engine.hotkey_manager.entries = [self._bare_q_entry()]
+        self.engine._user32.down_vks.add(self.engine.VK_LCONTROL)
+        self.engine._physical_modifiers.add(self.engine.VK_LCONTROL)
         self.assertEqual(self._key(ord("Q"), True), 0)
         self.assertEqual(self.engine.pop_hotkey_events(), [])
 
     def test_ime_composition_blocks_hotkey(self):
-        self.engine.hotkey_manager.entries = [self._ctrl_alt_q_entry()]
-        self.engine._user32.down_vks.update(
-            {self.engine.VK_LCONTROL, self.engine.VK_LMENU}
-        )
+        self.engine.hotkey_manager.entries = [self._bare_q_entry()]
         self.engine._ime_composing = True
         self.assertEqual(self._key(ord("Q"), True), 0)
+        self.assertEqual(self._key(ord("Q"), False), 0)
         self.assertEqual(self.engine.pop_hotkey_events(), [])
+        # 组合输入结束后同一按键可正常触发
+        self.engine._ime_composing = False
+        self.assertEqual(self._key(ord("Q"), True), 1)
+        self.assertEqual(self.engine.pop_hotkey_events(), [1])
 
     def _capture_injection(self):
         def inject(name, down):

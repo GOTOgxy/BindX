@@ -277,6 +277,11 @@ class TriggerEngine:
 
         self.keyboard_enabled = False
         self.mouse_enabled = False
+        # 实际安装的低级钩子标志（_run/_stop_thread 维护）。
+        # 纯原生热键模式（RegisterHotKey）下无需安装任何钩子，
+        # 全局输入事件完全不经过我们的回调。
+        self._active_kb = False
+        self._active_mouse = False
         self.running = False
         self.last_error = None
         self.last_event = "无"
@@ -343,7 +348,7 @@ class TriggerEngine:
                 self.mouse_enabled = bool(mouse_enabled)
         with self._lock:
             self._sync_hotkey_status()
-            desired = self.keyboard_enabled or self.mouse_enabled
+            desired = self._needs_any_hook()
         # 启/停在锁外进行：_stop_thread 需要 join 钩子线程，而钩子回调
         # 又会获取 self._lock，持锁等待会等死自己（也会触发低级钩子超时）。
         if desired:
@@ -355,6 +360,52 @@ class TriggerEngine:
         with self._lock:
             self.mouse_config = config
             self._rebuild_mouse_index()
+        self._reconfigure()
+
+    def _hook_managed_hotkey_ids(self):
+        # 无修饰键热键无法用 RegisterHotKey 原生注册（0 个修饰键会被
+        # 系统拒绝），只能由 LL 钩子捕获；此类条目的注册状态归钩子管。
+        return {
+            e["id"] for e in self.hotkey_manager.entries
+            if e.get("enabled", True) and not e.get("modifiers")
+        }
+
+    def _needs_keyboard_hook(self):
+        if not self.keyboard_enabled:
+            return False
+        if self._hook_managed_hotkey_ids():
+            return True
+        return any(
+            parsed is not None and mapping.get("enabled", True)
+            for _idx, mapping, parsed in self._key_mappings
+        )
+
+    def _needs_mouse_hook(self):
+        return bool(
+            self.mouse_enabled
+            and any(
+                m.get("enabled", True)
+                for m in self.mouse_config.get("mouse_mappings", [])
+            )
+        )
+
+    def _needs_any_hook(self):
+        return self._needs_keyboard_hook() or self._needs_mouse_hook()
+
+    def _reconfigure(self):
+        # 按当前配置决定是否需要（重新）安装钩子。
+        # 注意：不在持锁期间调 _stop_thread（它要 join 钩子线程，
+        # 而钩子回调也要拿锁）。
+        with self._lock:
+            need_kb = self._needs_keyboard_hook()
+            need_mouse = self._needs_mouse_hook()
+            cur_kb, cur_mouse = self._active_kb, self._active_mouse
+        if need_kb != cur_kb or need_mouse != cur_mouse:
+            self.reinstall_hooks()
+
+    def notify_hotkeys_changed(self):
+        # GUI 直接改热键条目后调用：重新评估钩子需求
+        self._reconfigure()
 
     def set_output_options(self, delay_ms=None, restore_held_modifiers=None):
         with self._lock:
@@ -391,7 +442,7 @@ class TriggerEngine:
     def reinstall_hooks(self):
         self._stop_thread()
         with self._lock:
-            desired = self.keyboard_enabled or self.mouse_enabled
+            desired = self._needs_any_hook()
         if desired:
             self._ensure_running()
 
@@ -413,6 +464,8 @@ class TriggerEngine:
 
     def _ensure_running(self):
         with self._lock:
+            if not self._needs_any_hook():
+                return
             if self._thread and self._thread.is_alive():
                 return
             self._start_diag_writer()
@@ -443,6 +496,8 @@ class TriggerEngine:
             self.running = False
             self._run_state = None
             self._output_worker = None
+            self._active_kb = False
+            self._active_mouse = False
             # A1: 快照当前按键状态，钩子重装后恢复
             self._snap_pressed = set(self._pressed_vks)
             self._snap_suppressed = set(self._suppressed_keyups)
@@ -492,7 +547,7 @@ class TriggerEngine:
             try:
                 restart_needed = False
                 with self._lock:
-                    desired = self.keyboard_enabled or self.mouse_enabled
+                    desired = self._needs_any_hook()
                     if not desired:
                         continue
                     stale = bool(
@@ -516,9 +571,14 @@ class TriggerEngine:
                 self._diag_log("watchdog exception:\n" + _tb_text())
 
     def _sync_hotkey_status(self):
-        active = bool(self.keyboard_enabled and self.running)
+        # 带修饰键热键的注册状态归原生 RegisterHotKey 机制所有
+        # （poll 线程在 _register_now 里设置），钩子只汇报
+        # 无修饰键热键（钩子独占）。
+        active = bool(self.keyboard_enabled and self.running and self._active_kb)
         self.hotkey_manager.external_trigger_active = active
         for entry in self.hotkey_manager.entries:
+            if entry.get("modifiers"):
+                continue
             entry["registered"] = bool(active and entry.get("enabled", True))
             if entry["registered"]:
                 entry["last_error"] = None
@@ -585,24 +645,52 @@ class TriggerEngine:
         kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
         kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 
-        keyboard_proc = HOOKPROC(self._keyboard_proc)
-        mouse_proc = HOOKPROC(self._mouse_proc)
         hinst = kernel32.GetModuleHandleW(None)
-        keyboard_hook = user32.SetWindowsHookExW(self.WH_KEYBOARD_LL, keyboard_proc, hinst, 0)
-        mouse_hook = user32.SetWindowsHookExW(self.WH_MOUSE_LL, mouse_proc, hinst, 0)
+        # 按需求安装键盘/鼠标钩子：没有无修饰键热键、也没有启用的
+        # 按键映射/鼠标映射时，对应钩子根本不安装——纯原生热键模式下
+        # 全局输入事件完全不经过我们的回调（打字零干预）。
+        # HOOKPROC 局部引用在消息泵期间一直存活（函数帧未退出），
+        # 回调不会被 GC。
+        need_kb = self._needs_keyboard_hook()
+        need_mouse = self._needs_mouse_hook()
+        keyboard_proc = None
+        mouse_proc = None
+        keyboard_hook = None
+        mouse_hook = None
+        if need_kb:
+            keyboard_proc = HOOKPROC(self._keyboard_proc)
+            keyboard_hook = user32.SetWindowsHookExW(self.WH_KEYBOARD_LL, keyboard_proc, hinst, 0)
+        if need_mouse:
+            mouse_proc = HOOKPROC(self._mouse_proc)
+            mouse_hook = user32.SetWindowsHookExW(self.WH_MOUSE_LL, mouse_proc, hinst, 0)
 
-        if not keyboard_hook or not mouse_hook:
+        if not keyboard_hook and not mouse_hook:
             self.last_error = f"SetWindowsHookExW failed: {ctypes.get_last_error()}"
             self._finish_run(user32, keyboard_hook, mouse_hook, run_stop, gen)
             self._sync_hotkey_status()
             return
+        if (need_kb and not keyboard_hook) or (need_mouse and not mouse_hook):
+            # 只有一个钩子失败：用成功的那个降级运行
+            self.last_error = (
+                "Partial SetWindowsHookExW failure: "
+                f"keyboard={bool(keyboard_hook)}, mouse={bool(mouse_hook)} "
+                f"(error {ctypes.get_last_error()})"
+            )
+            self._diag_log(
+                "hook partial failure (degraded mode): "
+                f"keyboard={bool(keyboard_hook)}, mouse={bool(mouse_hook)}"
+            )
 
         with self._lock:
             self._keyboard_hook = keyboard_hook
             self._mouse_hook = mouse_hook
+            self._active_kb = bool(keyboard_hook)
+            self._active_mouse = bool(mouse_hook)
             self._run_state = _RunState(gen)
         self.running = True
-        self.last_error = None
+        # 只有"需要装的钩子全部成功"才清错误（降级模式保留提示）
+        if (not need_kb or keyboard_hook) and (not need_mouse or mouse_hook):
+            self.last_error = None
         self._slow_hook_count = 0
         # 种子物理修饰键状态：只查具体 VK（通用 VK_CONTROL/SHIFT/MENU
         # 与具体 VK 同组、状态相同；若把通用 VK 也存进来，会留下
@@ -1115,6 +1203,10 @@ class TriggerEngine:
         current_mods = self._current_modifiers()
         for entry in self.hotkey_manager.entries:
             if not entry.get("enabled", True):
+                continue
+            # 带修饰键热键统一由原生 RegisterHotKey 处理；钩子只捕获
+            # 钩子独占的无修饰键热键，避免同一热键双份触发。
+            if entry.get("modifiers"):
                 continue
             if entry["virtual_key"] != vk or entry["modifiers"] != current_mods:
                 continue

@@ -214,7 +214,7 @@ class BindXApp(ctk.CTk):
 
     def _refresh_status_loop(self):
         self.overview_tab.refresh_status()
-        hook_state = "运行中" if self.controller.trigger_engine.running else "未运行"
+        hook_state = "运行中" if self.controller.trigger_engine.running else "未运行(无需钩子)"
         self.sidebar_status.configure(
             text=f"Hook: {hook_state}\n热键: {'开' if self.controller.hk_running else '关'}\n鼠标: {'开' if self.controller.mc_running else '关'}"
         )
@@ -224,7 +224,7 @@ class BindXApp(ctk.CTk):
         current_menu_font = menu_font(self)
         menu = tk.Menu(self, tearoff=0, font=current_menu_font)
         menu.configure(font=current_menu_font)
-        hook_state = "运行中" if self.controller.trigger_engine.running else "未运行"
+        hook_state = "运行中" if self.controller.trigger_engine.running else "未运行(无需钩子)"
         menu.add_command(label=f"Hook：{hook_state}", state=tk.DISABLED)
         menu.add_command(
             label=f"Keyboard：{'开' if self.controller.hk_running else '关'} / Mouse：{'开' if self.controller.mc_running else '关'}",

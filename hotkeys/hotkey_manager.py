@@ -241,6 +241,40 @@ user32.DestroyWindow.restype = wintypes.BOOL
 user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.DefWindowProcW.restype = ctypes.c_long
 
+# ---------------------------------------------------------------------------
+# 热键消息窗口：类注册与 wndproc 回调必须与进程同生命周期。
+#
+# 关键不变量：RegisterClassW 注册的窗口类一旦成功就永久存在（本模块从不
+# UnregisterClassW），其 lpfnWndProc 指向的 ffi closure 绝不能被 GC 释放。
+# 因此 wndproc 回调对象存放在模块级全局 _hotkey_wndproc_ref，类只注册一次
+# （加锁防多线程竞争）。_poll_loop 每次运行只创建/销毁窗口，不重复注册类。
+# ---------------------------------------------------------------------------
+_MSG_CLASS_NAME = "AppHotkeyManagerMsg"
+_MSG_CLASS_HINSTANCE = kernel32.GetModuleHandleW(None)
+_hotkey_wndproc_ref = None
+_hotkey_class_ready = False
+_hotkey_class_lock = threading.Lock()
+
+
+def _default_msg_wndproc(hwnd, msg, wparam, lparam):
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+
+def _ensure_msg_class():
+    global _hotkey_wndproc_ref, _hotkey_class_ready
+    with _hotkey_class_lock:
+        if _hotkey_class_ready:
+            return
+        _hotkey_wndproc_ref = ctypes.WINFUNCTYPE(
+            ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+        )(_default_msg_wndproc)
+        wc = WNDCLASS()
+        wc.lpfnWndProc = ctypes.cast(_hotkey_wndproc_ref, ctypes.c_void_p)
+        wc.lpszClassName = _MSG_CLASS_NAME
+        wc.hInstance = _MSG_CLASS_HINSTANCE
+        user32.RegisterClassW(ctypes.byref(wc))
+        _hotkey_class_ready = True
+
 shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.POINTER(NOTIFYICONDATAW)]
 shell32.Shell_NotifyIconW.restype = wintypes.BOOL
 
@@ -1306,6 +1340,9 @@ class HotkeyManager:
         self._queue_lock = threading.Lock()
         self._polling = False
         self._hwnd = None
+        # 轮询线程未启动时 _register_one/_unregister_one 也能安全入队
+        self._pending_registers = []
+        self._pending_unregisters = []
         self.external_trigger_mode = False
         self.external_trigger_active = False
         self._build_entries()
@@ -1391,6 +1428,10 @@ class HotkeyManager:
             self._pending_unregisters.append(entry["id"])
 
     def _register_now(self, hwnd, entry: dict) -> bool:
+        if entry.get("registered"):
+            # 幂等保护：该热键已注册成功则跳过，避免同一 (hwnd, id) 重复
+            # RegisterHotKey 返回 1409（该快捷键已被系统或其他程序占用）
+            return True
         ctypes.set_last_error(0)
         ok = user32.RegisterHotKey(hwnd, entry["id"], entry["modifiers"], entry["virtual_key"])
         entry["registered"] = bool(ok)
@@ -1437,18 +1478,16 @@ class HotkeyManager:
             thread.join(timeout=1.0)
 
     def _poll_loop(self):
-        wndproc_ref = ctypes.WINFUNCTYPE(
-            ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
-        )(self._wndproc_impl)
-
-        wc = WNDCLASS()
-        wc.lpfnWndProc = ctypes.cast(wndproc_ref, ctypes.c_void_p)
-        wc.lpszClassName = "AppHotkeyManagerMsg"
-        wc.hInstance = kernel32.GetModuleHandleW(None)
-        user32.RegisterClassW(ctypes.byref(wc))
+        # 窗口类 + wndproc 回调是进程级单例（见 _ensure_msg_class）。
+        # 旧实现把 wndproc 回调当 _poll_loop 局部变量：轮询线程退出后 ffi
+        # closure 被释放，但 RegisterClassW 注册的类仍在系统里，下一次
+        # start_polling_thread 时 Windows 会调用这个悬空指针
+        # （use-after-free：进程硬崩溃，或闭包内存被复用后回调变成任意
+        # 对象，表现为 'list' object is not callable）。
+        _ensure_msg_class()
         hwnd = user32.CreateWindowExW(
-            0, wc.lpszClassName, "AppHotkeyManagerMsg",
-            0, 0, 0, 0, 0, None, None, wc.hInstance, None
+            0, _MSG_CLASS_NAME, _MSG_CLASS_NAME,
+            0, 0, 0, 0, 0, None, None, _MSG_CLASS_HINSTANCE, None
         )
         self._hwnd = hwnd
 
@@ -1508,6 +1547,15 @@ class HotkeyManager:
                         entry["controller"].toggle()
                 except Exception:
                     pass
+
+    def pop_hotkey_events(self):
+        # 取走并清空已触发的原生热键事件队列（不执行动作）。
+        # BindX 的 Controller 用它消费事件并统一分发；
+        # 子项目独立运行时用 process_hotkeys()。
+        with self._queue_lock:
+            pending = list(self._hotkey_queue)
+            self._hotkey_queue.clear()
+        return pending
 
     def add_entry(self, app_id: str, hotkey: str, enabled: bool = True,
                   launch_if_not_running: bool = False, install_path: str = "",

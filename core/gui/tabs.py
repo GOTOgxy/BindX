@@ -205,10 +205,13 @@ class OverviewTab(ctk.CTkFrame):
         else:
             self.hk_status.configure(text="已停止")
 
-        if self.controller.mc_running and self.controller.trigger_engine.running:
-            self.mc_status.configure(text="运行中")
-        elif self.controller.mc_running and self.controller.trigger_engine.last_error:
-            self.mc_status.configure(text=f"启动失败 {self.controller.trigger_engine.last_error}")
+        if self.controller.mc_running:
+            if self.controller.trigger_engine._active_mouse:
+                self.mc_status.configure(text="运行中")
+            elif self.controller.trigger_engine.last_error:
+                self.mc_status.configure(text=f"启动失败 {self.controller.trigger_engine.last_error}")
+            else:
+                self.mc_status.configure(text="运行中(无启用的鼠标映射)")
         else:
             self.mc_status.configure(text="已停止")
 
@@ -250,6 +253,9 @@ class OverviewTab(ctk.CTkFrame):
         try:
             config_store.save_root_config(raw)
             self.controller.reload_all_config()
+            # reload 后 hotkey_manager 是新实例，同步引用，
+            # 避免标签页继续操作旧实例
+            self.app.hotkey_tab.manager = self.controller.hotkey_manager
             self.refresh_status()
             self.app.hotkey_tab._refresh_list()
             self.app.mouse_tab.reload_config()
@@ -370,6 +376,9 @@ class HotKeyTab(ctk.CTkFrame):
                 registered = "引擎停止"
             elif entry.get("registered"):
                 registered = "已注册"
+            elif not entry.get("modifiers") and not self.controller.trigger_engine.running:
+                # 无修饰键热键由钩子负责注册；钩子没跑等于没注册
+                registered = "引擎停止"
             else:
                 err = entry.get("last_error")
                 registered = f"失败 {err}" if err else "待注册"

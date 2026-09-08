@@ -25,7 +25,9 @@ class BindXController:
 
         self.hk_config = self._load_hotkey_config()
         self.hotkey_manager = self._HotkeyManager(self.hk_config)
-        self.hotkey_manager.external_trigger_mode = True
+        # 标准热键（带修饰键）改由原生 RegisterHotKey 注册，
+        # 不再需要 external_trigger_mode；LL 钩子仅在存在
+        # 无修饰键热键或启用的按键/鼠标映射时才安装。
 
         self.hk_running = bool(self.app_state.get("hotkey_running", True))
         self.hotkey_manager.external_trigger_active = self.hk_running
@@ -42,30 +44,46 @@ class BindXController:
             delay_ms=self.app_state.get("output_delay_ms", 20),
             restore_held_modifiers=self.app_state.get("restore_held_modifiers", True),
         )
+        # 原生热键轮询线程：把启用的带修饰键热键通过 RegisterHotKey
+        # 注册（零侵入）；主线程定时器经 process_hotkeys() 消费
+        # pop_hotkey_events() 分发。
+        self.hotkey_manager.start_polling_thread(register_enabled=self.hk_running)
+        self._wrap_hotkey_crud()
         self._sync_autostart_state()
 
     def set_hotkey_self_callback(self, callback):
         self.hotkey_manager.set_self_callback(callback)
 
     def process_hotkeys(self):
+        # Tk 主线程定时器调用：消费两路热键事件——
+        # TriggerEngine 钩子队列（无修饰键热键）与
+        # 原生 RegisterHotKey 队列（标准修饰键热键）。
         if self.trigger_engine is None:
             return
-        for entry_id in self.trigger_engine.pop_hotkey_events():
-            entry = self.hotkey_manager.entry_map.get(entry_id)
-            if not entry or not entry.get("enabled", True):
-                continue
-            controller = entry.get("controller")
-            if controller is None:
-                continue
-            # BindX 自身的热键回调（如显示/隐藏主窗口）是 Tk 操作，
-            # 必须在 Tk 主线程执行；其余 AppController 动作（激活/隐藏/
-            # 启动目标窗口）是慢速 Win32 跨进程调用，在主线程里执行会
-            # 长时间占用 GIL，饿死 hook 线程（输入卡顿的根源之一），
-            # 放到后台线程并加 in-flight 保护避免同一动作并发。
-            if hasattr(controller, "callback"):
-                self._invoke_hotkey_action(entry)
-            else:
-                self._spawn_hotkey_action(entry)
+        event_ids = list(self.trigger_engine.pop_hotkey_events())
+        try:
+            event_ids.extend(self.hotkey_manager.pop_hotkey_events())
+        except Exception:
+            pass
+        for entry_id in event_ids:
+            self._dispatch_hotkey(entry_id)
+
+    def _dispatch_hotkey(self, entry_id):
+        entry = self.hotkey_manager.entry_map.get(entry_id)
+        if not entry or not entry.get("enabled", True):
+            return
+        controller = entry.get("controller")
+        if controller is None:
+            return
+        # BindX 自身的热键回调（如显示/隐藏主窗口）是 Tk 操作，
+        # 必须在 Tk 主线程执行；其余 AppController 动作（激活/隐藏/
+        # 启动目标窗口）是慢速 Win32 跨进程调用，在主线程里执行会
+        # 长时间占用 GIL，饿死 hook 线程（输入卡顿的根源之一），
+        # 放到后台线程并加 in-flight 保护避免同一动作并发。
+        if hasattr(controller, "callback"):
+            self._invoke_hotkey_action(entry)
+        else:
+            self._spawn_hotkey_action(entry)
 
     def _invoke_hotkey_action(self, entry):
         try:
@@ -89,6 +107,29 @@ class BindXController:
             entry["last_error"] = str(error)
         finally:
             entry["_action_inflight"] = False
+
+    def _wrap_hotkey_crud(self):
+        # GUI 直接对 hotkey_manager 调 CRUD（绕过 controller）；
+        # CRUD 后通知 TriggerEngine 重新评估是否需要低级钩子
+        # （新增无修饰键热键/按键映射需要钩子；恢复全原生则卸载）。
+        manager = self.hotkey_manager
+        engine = self.trigger_engine
+        for name in (
+            "add_entry", "update_entry", "remove_entry",
+            "toggle_entry", "set_launch_if_not_running",
+        ):
+            original = getattr(manager, name)
+
+            def wrapped(*args, _original=original, **kwargs):
+                result = _original(*args, **kwargs)
+                try:
+                    engine.notify_hotkeys_changed()
+                except Exception:
+                    pass
+                return result
+
+            wrapped.__name__ = name
+            setattr(manager, name, wrapped)
 
     def _save_engine_state(self):
         config_store.save_app_state(self.app_state)
@@ -153,6 +194,11 @@ class BindXController:
             return
         self.hk_running = True
         self.hotkey_manager.external_trigger_active = True
+        # 原生模式：重新注册所有启用的带修饰键热键（进入 poll 线程队列）
+        try:
+            self.hotkey_manager.register_all()
+        except Exception:
+            pass
         self.trigger_engine.set_enabled(keyboard_enabled=True)
         self.app_state["hotkey_running"] = True
         if persist:
@@ -163,6 +209,10 @@ class BindXController:
             return
         self.hk_running = False
         self.hotkey_manager.external_trigger_active = False
+        try:
+            self.hotkey_manager.unregister_all()
+        except Exception:
+            pass
         self.trigger_engine.set_enabled(keyboard_enabled=False)
         self.app_state["hotkey_running"] = False
         if persist:
@@ -179,15 +229,22 @@ class BindXController:
                 if ctrl is not None and hasattr(ctrl, "callback"):
                     self_cb = ctrl.callback
                 break
+        # 先停旧 manager 的轮询线程（卸载其原生热键、销毁消息窗口），
+        # 避免残留注册造成重复触发
+        try:
+            self.hotkey_manager.stop_polling_thread()
+        except Exception:
+            pass
         self.hk_config = self._load_hotkey_config()
         self.hotkey_manager = self._HotkeyManager(self.hk_config)
-        self.hotkey_manager.external_trigger_mode = True
         self.hotkey_manager.external_trigger_active = self.hk_running
         if self_cb is not None:
             self.hotkey_manager.set_self_callback(self_cb)
+        self.hotkey_manager.start_polling_thread(register_enabled=self.hk_running)
         self.trigger_engine.hotkey_manager = self.hotkey_manager
         self.mc_config = self._load_mouse_config()
         self.trigger_engine.update_mouse_config(self.mc_config)
+        self._wrap_hotkey_crud()
 
     def start_mouse(self, persist=True):
         if self.trigger_engine is None:
@@ -231,5 +288,10 @@ class BindXController:
     def quit(self):
         try:
             self.trigger_engine.shutdown()
+        except Exception:
+            pass
+        try:
+            if self.hotkey_manager is not None:
+                self.hotkey_manager.stop_polling_thread()
         except Exception:
             pass
