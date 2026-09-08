@@ -9,7 +9,7 @@ WH_KEYBOARD_LL / WH_MOUSE_LL 低层 hook、触发匹配与 hook 自恢复。
 import threading
 
 from . import config_proxy, config_store, startup_manager
-from .trigger_engine import TriggerEngine
+from .hook_host import HookEngineFacade, HookHost
 
 
 class BindXController:
@@ -34,15 +34,22 @@ class BindXController:
         self.mc_config = self._load_mouse_config()
         self.mc_running = bool(self.app_state.get("mouse_running", True))
 
-        self.trigger_engine = TriggerEngine(self.hotkey_manager, self.mc_config)
+        # 进程隔离：低级钩子在 hookd 子进程内运行（见 core/hookd.py），
+        # 主进程只持有门面（配置推送 + 状态镜像）。子进程崩溃/挂死
+        # 由 HookHost 自动拉起；挂死子进程的钩子由 Windows 自动卸载
+        # （fail-open），用户输入不中断。
+        self._hook_host = HookHost()
+        self._hook_host.start()
+        self.trigger_engine = HookEngineFacade(self._hook_host)
         self.mouse_engine = self.trigger_engine
-        self.trigger_engine.set_enabled(
-            keyboard_enabled=self.hk_running,
-            mouse_enabled=self.mc_running,
-        )
+        self.trigger_engine.hotkey_manager = self.hotkey_manager
         self.trigger_engine.set_output_options(
             delay_ms=self.app_state.get("output_delay_ms", 20),
             restore_held_modifiers=self.app_state.get("restore_held_modifiers", True),
+        )
+        self.trigger_engine.set_enabled(
+            keyboard_enabled=self.hk_running,
+            mouse_enabled=self.mc_running,
         )
         # 原生热键轮询线程：把启用的带修饰键热键通过 RegisterHotKey
         # 注册（零侵入）；主线程定时器经 process_hotkeys() 消费

@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Unit + contract tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: E2E smoke (real hooks + hookd subprocess)
+        run: python tests\e2e_smoke.py
+
+      - name: E2E crash cycles (hookd respawn)
+        env:
+          BINDX_E2E_CYCLES: "8"
+        run: python tests\e2e_crash_cycles.py
