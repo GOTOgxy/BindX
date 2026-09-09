@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -25,6 +26,9 @@ DEFAULT_MONITOR_INTERVAL = 1.0
 MAX_BACKOFF = 15.0
 START_GRACE = 15.0
 CREATE_NO_WINDOW = 0x08000000
+HOST_LOG = PROJECT_DIR / "data" / "bindx_hook_host.log"
+FAIL_WINDOW = 120.0
+FAIL_LIMIT = 5
 
 
 class HookHost:
@@ -32,12 +36,19 @@ class HookHost:
 
     def __init__(self, start_cmd=None, cwd=None, hb_timeout=DEFAULT_HB_TIMEOUT,
                  monitor_interval=DEFAULT_MONITOR_INTERVAL,
-                 stderr_path=STDERR_LOG):
+                 stderr_path=STDERR_LOG, host_log=None):
         self._start_cmd = start_cmd or [sys.executable, "-m", "core.hookd"]
         self._cwd = str(cwd or PROJECT_DIR)
         self._hb_timeout = float(hb_timeout)
         self._monitor_interval = float(monitor_interval)
         self._stderr_path = Path(stderr_path)
+        # 宿主日志默认与 stderr 日志同目录（测试注入 tmp stderr_path 时
+        # 自动隔离到 tmp，不会污染 data/）
+        self._host_log_path = (
+            Path(host_log)
+            if host_log is not None
+            else self._stderr_path.parent / "bindx_hook_host.log"
+        )
 
         self._proc = None
         self._proc_lock = threading.RLock()
@@ -46,6 +57,7 @@ class HookHost:
         self._ready = threading.Event()
         self._last_hb = 0.0
         self._backoff = 0.2
+        self._fail_window = []
 
         self._config = None
         self._force = False
@@ -128,6 +140,42 @@ class HookHost:
                     pass
 
     # ---------- 内部实现 ----------
+
+    def _host_log(self, message):
+        # 宿主侧生命周期日志：旧版 reader/monitor 全部 except: pass，
+        # 重启循环完全不可见
+        try:
+            self._host_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._host_log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+        except Exception:
+            pass
+
+    def _fail_storm(self):
+        # 重启风暴保护：FAIL_WINDOW 秒内子进程失败超过 FAIL_LIMIT 次即
+        # 停止自动重启并暴露错误（此前子进程反复死 → 反复拉起，
+        # 进程churn 在桌面上表现为沙漏光标无限循环出现/消失）。
+        now = time.monotonic()
+        self._fail_window = [
+            t for t in self._fail_window if now - t < FAIL_WINDOW
+        ]
+        self._fail_window.append(now)
+        if len(self._fail_window) <= FAIL_LIMIT:
+            return False
+        self._host_log(
+            f"hookd failed {len(self._fail_window)} times within "
+            f"{FAIL_WINDOW:.0f}s; auto-respawn stopped"
+        )
+        with self._status_lock:
+            self._status["running"] = False
+            self._status["last_error"] = (
+                f"hookd 子进程 {FAIL_WINDOW:.0f}s 内失败 "
+                f"{len(self._fail_window)} 次，已停止自动重启，"
+                "详见 data/bindx_hook_host.log"
+            )
+        self._ready.clear()
+        self._stopping = True
+        return True
 
     def _spawn(self):
         if self._stopping:
@@ -215,6 +263,7 @@ class HookHost:
             pass
 
     def _reader_loop(self, proc):
+        reader_error = None
         try:
             for raw in proc.stdout:
                 raw = raw.strip()
@@ -226,20 +275,34 @@ class HookHost:
                     continue
                 try:
                     self._on_message(msg)
+                except Exception as exc:
+                    self._host_log(f"hookd message handling error: {exc!r}")
+        except Exception:
+            reader_error = traceback.format_exc()
+        try:
+            child_dead = proc.poll() is not None
+        except Exception:
+            child_dead = True
+        if reader_error is not None:
+            self._host_log(
+                f"hookd reader loop exited (pid={proc.pid}, child_dead={child_dead}):\n"
+                f"{reader_error}"
+            )
+        if child_dead:
+            # 子进程已退出：摘除引用，由监控循环负责重启
+            with self._proc_lock:
+                if self._proc is proc:
+                    self._proc = None
+            self._ready.clear()
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                try:
+                    if stream is not None:
+                        stream.close()
                 except Exception:
                     pass
-        except Exception:
-            pass
-        with self._proc_lock:
-            if self._proc is proc:
-                self._proc = None
-        self._ready.clear()
-        for stream in (proc.stdin, proc.stdout, proc.stderr):
-            try:
-                if stream is not None:
-                    stream.close()
-            except Exception:
-                pass
+        # 子进程仍存活但 reader 线程异常退出：绝不能关 proc.stdin
+        # （旧版无条件关 stdin → 子进程收 EOF → 静默 exit 0 → 监控再拉起
+        # → 无限重启循环）。此情形下留给监控循环的心跳超时自愈。
 
     def _on_message(self, msg):
         mtype = msg.get("type")
@@ -290,8 +353,15 @@ class HookHost:
                 continue
             if proc.poll() is not None:
                 was_ready = self._ready.is_set()
+                alive = time.monotonic() - self._spawn_time
+                self._host_log(
+                    f"hookd exited: code={proc.returncode}, "
+                    f"alive={alive:.1f}s, was_ready={was_ready}"
+                )
                 self._kill_proc()
                 if self._stopping:
+                    return
+                if self._fail_storm():
                     return
                 delay = 0.2 if was_ready else self._backoff
                 time.sleep(delay)
@@ -303,16 +373,25 @@ class HookHost:
                         and time.monotonic() - self._last_hb > self._hb_timeout):
                     # 心跳超时（子进程挂死）：杀掉重启；
                     # Windows 已自动卸载挂死进程的钩子（fail-open）
+                    self._host_log(
+                        f"hookd heartbeat timeout >"
+                        f"{self._hb_timeout:.0f}s; kill & respawn"
+                    )
                     self._kill_proc()
                     if self._stopping:
+                        return
+                    if self._fail_storm():
                         return
                     time.sleep(self._backoff)
                     self._backoff = min(self._backoff * 2.0, MAX_BACKOFF)
                     self._spawn()
             elif time.monotonic() - self._spawn_time > START_GRACE:
                 # 迟迟收不到 ready（启动失败/卡死）：杀掉重启
+                self._host_log(
+                    "hookd not ready within grace period; kill & respawn"
+                )
                 self._kill_proc()
-                if not self._stopping:
+                if not self._stopping and not self._fail_storm():
                     self._spawn()
 
 

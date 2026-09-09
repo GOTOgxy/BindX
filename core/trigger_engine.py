@@ -665,7 +665,21 @@ class TriggerEngine:
             mouse_hook = user32.SetWindowsHookExW(self.WH_MOUSE_LL, mouse_proc, hinst, 0)
 
         if not keyboard_hook and not mouse_hook:
-            self.last_error = f"SetWindowsHookExW failed: {ctypes.get_last_error()}"
+            if not (need_kb or need_mouse):
+                # 纯原生热键模式：本来就不需要低级钩子，不是失败。
+                # 本次 run 没有消息泵要驱动，直接退出（watchdog 也
+                # 不会为无钩子需求重启它）。
+                self.last_error = None
+                self._diag_log(
+                    "no LL hook needed (native hotkey mode); "
+                    "run thread exits idle"
+                )
+            else:
+                self.last_error = f"SetWindowsHookExW failed: {ctypes.get_last_error()}"
+                self._diag_log(
+                    f"SetWindowsHookExW failed: {ctypes.get_last_error()} "
+                    f"(need_kb={need_kb}, need_mouse={need_mouse})"
+                )
             self._finish_run(user32, keyboard_hook, mouse_hook, run_stop, gen)
             self._sync_hotkey_status()
             return

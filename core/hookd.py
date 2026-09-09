@@ -178,6 +178,7 @@ def main():
         last_status = _sp
         send({"type": "status", "payload": _sp})
 
+    got_quit = False
     for raw in sys.stdin.buffer:
         if stop.is_set():
             break
@@ -205,8 +206,20 @@ def main():
                     payload = []
             send({"type": "log", "payload": payload})
         elif mtype == "quit":
+            got_quit = True
             break
 
+    if not got_quit:
+        # 未收到 quit 就 stdin 被关闭：不是正常退出，而是宿主侧断管
+        # （或宿主崩溃）。写入 stderr（宿主已重定向到
+        # data/bindx_hookd_stderr.log），并以非零码退出，便于监控
+        # 区分“正常退出”与“被断管”。
+        print(
+            f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] hookd: stdin EOF "
+            "without quit (host dropped the pipe) - unintended exit",
+            file=sys.stderr,
+            flush=True,
+        )
     stop.set()
     if engine is not None:
         try:
@@ -214,7 +227,7 @@ def main():
         except Exception:
             pass
     send({"type": "exit"})
-    return 0
+    return 0 if got_quit else 1
 
 
 if __name__ == "__main__":
