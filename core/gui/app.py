@@ -10,6 +10,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
 
 from .tabs import HotKeyTab, MouseTab, OverviewTab
+from .scrollable import AutoHideScrollableFrame
 from .theme import (FONT_PRESET_TABLE_SIZE, _clamp, _compute_ui_scale,
                     _force_toplevel_foreground, _parse_window_size, menu_font,
                     scaled, ui_font)
@@ -37,14 +38,15 @@ class BindXApp(ctk.CTk):
         max_h = max(1, int(logical_screen_h * 0.88))
         default_w = min(max(980, int(logical_screen_w * 0.72)), max_w)
         default_h = min(max(640, int(logical_screen_h * 0.72)), max_h)
-        self._window_min_w = min(860, max_w)
+        self._window_min_w = min(1024, max_w)
         self._window_min_h = min(540, max_h)
         self._window_max_w = max_w
         self._window_max_h = max_h
         self._default_geometry = f"{default_w}x{default_h}"
         self.geometry(self._default_geometry)
         self.minsize(self._window_min_w, self._window_min_h)
-        self.configure(fg_color=("#f4f4f5", "#18181b"))
+        self._app_fg_color = ("#f4f4f5", "#18181b")
+        self.configure(fg_color=self._app_fg_color)
         self._restore_window_state()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -73,16 +75,17 @@ class BindXApp(ctk.CTk):
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(0, weight=1)
 
-        self.overview_tab = OverviewTab(self.content, controller, self)
-        self.hotkey_tab = HotKeyTab(self.content, controller)
-        self.mouse_tab = MouseTab(self.content, controller)
+        self.page_containers = []
+        self.overview_tab = OverviewTab(self._make_scrollable_page(), controller, self)
+        self.hotkey_tab = HotKeyTab(self._make_scrollable_page(), controller)
+        self.mouse_tab = MouseTab(self._make_scrollable_page(), controller)
         self.pages = {
-            "overview": self.overview_tab,
-            "hotkey": self.hotkey_tab,
-            "mouse": self.mouse_tab,
+            "overview": (self.page_containers[0], self.overview_tab),
+            "hotkey": (self.page_containers[1], self.hotkey_tab),
+            "mouse": (self.page_containers[2], self.mouse_tab),
         }
-        for page in self.pages.values():
-            page.grid(row=0, column=0, sticky="nsew")
+        for _, tab in self.pages.values():
+            tab.grid(row=0, column=0, sticky="nsew")
         self._show_page("overview")
 
         self.tray = TrayIcon(on_show=self._show_window, on_menu=self._show_tray_menu)
@@ -203,8 +206,17 @@ class BindXApp(ctk.CTk):
         btn.pack(fill=tk.X, padx=scaled(self, 12), pady=scaled(self, 4))
         return btn
 
+    def _make_scrollable_page(self):
+        """创建可滚动内容页：内容过高自动滚动，放得下时隐藏滚动条。"""
+        page = AutoHideScrollableFrame(self.content, fg_color=self._app_fg_color)
+        page.grid(row=0, column=0, sticky="nsew")
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(0, weight=1)
+        self.page_containers.append(page)
+        return page
+
     def _show_page(self, name):
-        self.pages[name].tkraise()
+        self.pages[name][0].lift()
         for key, btn in self.nav_buttons.items():
             if key == name:
                 btn.configure(fg_color=("#dbeafe", "#1d4ed8"), text_color=("#1d4ed8", "#ffffff"))

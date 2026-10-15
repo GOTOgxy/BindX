@@ -15,6 +15,18 @@ from .inspector import InputInspectorWindow
 from .theme import (BUTTON_DEFAULT_FG, BUTTON_DEFAULT_HOVER,
                     menu_font, scaled, ui_font)
 
+def _auto_wrap_label(label):
+    """标签自动换行：宽度不够时文本折行显示，而不是被截断。"""
+
+    def _on_configure(event):
+        width = label.winfo_width()
+        if width > 60:
+            label.configure(wraplength=width - 4)
+
+    label.bind("<Configure>", _on_configure)
+    return label
+
+
 class OverviewTab(ctk.CTkFrame):
     def __init__(self, parent, controller, app):
         super().__init__(parent, fg_color="transparent")
@@ -52,19 +64,20 @@ class OverviewTab(ctk.CTkFrame):
         actions.pack(fill=tk.X, pady=(16, 0))
         ctk.CTkLabel(actions, text="全局动作", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 10)))
         action_row = ctk.CTkFrame(actions, fg_color="transparent")
-        action_row.pack(fill=tk.X, padx=16, pady=(0, 16))
-        ctk.CTkButton(action_row, text="全部启动", command=self._start_all, width=96).pack(side=tk.LEFT, padx=(0, 8))
-        ctk.CTkButton(action_row, text="全部停止", command=self._stop_all, width=96, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
-        ctk.CTkButton(action_row, text="重置窗口", command=self.app._reset_window_layout, width=96, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
-        ctk.CTkButton(action_row, text="导出配置", command=self.export_config, width=96, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
-        ctk.CTkButton(action_row, text="导入配置", command=self.import_config, width=96, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
+        action_row.pack(fill=tk.X, padx=16, pady=(0, 12))
+        ctk.CTkButton(action_row, text="全部启动", command=self._start_all, width=88).pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(action_row, text="全部停止", command=self._stop_all, width=88, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(action_row, text="重置窗口", command=self.app._reset_window_layout, width=88, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(action_row, text="导出配置", command=self.export_config, width=88, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(action_row, text="导入配置", command=self.import_config, width=88, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(action_row, text="重新启动", command=self._restart_app, width=88, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT, padx=(0, 8))
         ctk.CTkButton(action_row, text="退出 BindX", command=self.app._quit_app, width=104, fg_color="#991b1b", hover_color="#7f1d1d").pack(side=tk.RIGHT)
 
-        font_row = ctk.CTkFrame(actions, fg_color="transparent")
-        font_row.pack(fill=tk.X, padx=16, pady=(0, 16))
-        ctk.CTkLabel(font_row, text="字体大小", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(0, 12))
+        settings_row = ctk.CTkFrame(actions, fg_color="transparent")
+        settings_row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        ctk.CTkLabel(settings_row, text="字体大小", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(0, 8))
         self.font_preset_menu = ctk.CTkOptionMenu(
-            font_row,
+            settings_row,
             values=["紧凑", "稍小", "常规", "特大", "超大"],
             command=self.app._change_font_preset,
             width=120,
@@ -72,13 +85,10 @@ class OverviewTab(ctk.CTkFrame):
         )
         self.font_preset_menu.pack(side=tk.LEFT)
         self.font_preset_menu.set(self.app._get_font_preset())
-
-        startup_row = ctk.CTkFrame(actions, fg_color="transparent")
-        startup_row.pack(fill=tk.X, padx=16, pady=(0, 16))
-        ctk.CTkLabel(startup_row, text="开机启动", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(0, 12))
+        ctk.CTkLabel(settings_row, text="开机启动", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(20, 8))
         self.autostart_var = tk.BooleanVar(value=self.controller.get_autostart_enabled())
         self.autostart_switch = ctk.CTkSwitch(
-            startup_row,
+            settings_row,
             text="登录后后台运行",
             variable=self.autostart_var,
             onvalue=True,
@@ -86,48 +96,53 @@ class OverviewTab(ctk.CTkFrame):
             command=self._toggle_autostart,
             font=ui_font(self, 14),
         )
-        self.autostart_switch.pack(side=tk.LEFT)
-
-        shortcut_row = ctk.CTkFrame(actions, fg_color="transparent")
-        shortcut_row.pack(fill=tk.X, padx=16, pady=(0, 16))
-        ctk.CTkLabel(shortcut_row, text="快捷方式", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(0, 12))
-        self.desktop_shortcut_btn = ctk.CTkButton(shortcut_row, text="创建桌面图标", command=self._toggle_desktop_shortcut, width=128)
+        self.autostart_switch.pack(side=tk.LEFT, padx=(20, 0))
+        ctk.CTkLabel(settings_row, text="快捷方式", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(20, 8))
+        self.desktop_shortcut_btn = ctk.CTkButton(settings_row, text="创建桌面图标", command=self._toggle_desktop_shortcut, width=112)
         self.desktop_shortcut_btn.pack(side=tk.LEFT, padx=(0, 8))
         self.start_menu_shortcut_btn = ctk.CTkButton(
-            shortcut_row,
+            settings_row,
             text="创建开始菜单图标",
             command=self._toggle_start_menu_shortcut,
-            width=152,
+            width=144,
         )
         self.start_menu_shortcut_btn.pack(side=tk.LEFT)
 
-        sync_card = ctk.CTkFrame(self, corner_radius=10)
-        sync_card.pack(fill=tk.X, pady=(16, 0))
-        ctk.CTkLabel(sync_card, text="配置云同步（Git）", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 4)))
-        self.sync_status = ctk.CTkLabel(sync_card, text="同步状态：查询中…", anchor="w", text_color="#71717a", font=ui_font(self, 12))
+        sync_cards = ctk.CTkFrame(self, fg_color="transparent")
+        sync_cards.pack(fill=tk.X, pady=(16, 0))
+        sync_cards.columnconfigure(0, weight=1)
+        sync_cards.columnconfigure(1, weight=1)
+
+        self.sync_card = ctk.CTkFrame(sync_cards, corner_radius=10)
+        self.sync_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        ctk.CTkLabel(self.sync_card, text="配置云同步（Git）", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 4)))
+        self.sync_status = _auto_wrap_label(
+            ctk.CTkLabel(self.sync_card, text="同步状态：查询中…", anchor="w", text_color="#71717a", font=ui_font(self, 12))
+        )
         self.sync_status.pack(anchor=tk.W, fill=tk.X, padx=scaled(self, 16), pady=(0, scaled(self, 8)))
-        sync_btn_row = ctk.CTkFrame(sync_card, fg_color="transparent")
+        sync_btn_row = ctk.CTkFrame(self.sync_card, fg_color="transparent")
         sync_btn_row.pack(fill=tk.X, padx=16, pady=(0, 16))
-        self.upload_sync_btn = ctk.CTkButton(sync_btn_row, text="上传配置", command=self._upload_sync, width=96)
+        self.upload_sync_btn = ctk.CTkButton(sync_btn_row, text="上传配置", command=self._upload_sync, width=88)
         self.upload_sync_btn.pack(side=tk.LEFT, padx=(0, 8))
-        self.download_sync_btn = ctk.CTkButton(sync_btn_row, text="拉取配置", command=self._download_sync, width=96, fg_color="#52525b", hover_color="#3f3f46")
+        self.download_sync_btn = ctk.CTkButton(sync_btn_row, text="拉取配置", command=self._download_sync, width=88, fg_color="#52525b", hover_color="#3f3f46")
         self.download_sync_btn.pack(side=tk.LEFT)
         self._sync_status_querying = False
-        code_card = ctk.CTkFrame(self, corner_radius=10)
-        code_card.pack(fill=tk.X, pady=(16, 0))
-        ctk.CTkLabel(code_card, text="代码同步（Git）", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 4)))
-        self.code_status = ctk.CTkLabel(code_card, text="代码状态：查询中……", anchor="w", text_color="#71717a", font=ui_font(self, 12))
+
+        self.code_card = ctk.CTkFrame(sync_cards, corner_radius=10)
+        self.code_card.grid(row=0, column=1, sticky="nsew")
+        ctk.CTkLabel(self.code_card, text="代码同步（Git）", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 4)))
+        self.code_status = _auto_wrap_label(
+            ctk.CTkLabel(self.code_card, text="代码状态：查询中……", anchor="w", text_color="#71717a", font=ui_font(self, 12))
+        )
         self.code_status.pack(anchor=tk.W, fill=tk.X, padx=scaled(self, 16), pady=(0, scaled(self, 8)))
-        code_btn_row = ctk.CTkFrame(code_card, fg_color="transparent")
+        code_btn_row = ctk.CTkFrame(self.code_card, fg_color="transparent")
         code_btn_row.pack(fill=tk.X, padx=16, pady=(0, 16))
-        self.pull_code_btn = ctk.CTkButton(code_btn_row, text="下载代码", command=self._pull_code, width=96)
+        self.pull_code_btn = ctk.CTkButton(code_btn_row, text="下载代码", command=self._pull_code, width=88)
         self.pull_code_btn.pack(side=tk.LEFT, padx=(0, 8))
-        self.push_code_btn = ctk.CTkButton(code_btn_row, text="上传代码", command=self._push_code, width=96)
+        self.push_code_btn = ctk.CTkButton(code_btn_row, text="上传代码", command=self._push_code, width=88)
         self.push_code_btn.pack(side=tk.LEFT, padx=(0, 8))
-        ctk.CTkButton(code_btn_row, text="重新启动", command=self._restart_app, width=96, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT)
         self._code_status_querying = False
         self.refresh_code_status()
-
         self.refresh_shortcut_buttons()
         self.refresh_status()
         self.refresh_sync_status()
