@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """BindX UI: 主应用入口（BindXApp）。"""
 
+import queue
+import threading
 import tkinter as tk
 
 import customtkinter as ctk
@@ -16,6 +18,8 @@ class BindXApp(ctk.CTk):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
+        self._config_sync_busy = False
+        self._ui_queue = queue.Queue()
         self._default_geometry = None
         self.ui_scale = _compute_ui_scale(self)
         ctk.set_widget_scaling(self.ui_scale)
@@ -86,6 +90,7 @@ class BindXApp(ctk.CTk):
         self._poll_tray()
         self._poll_hotkeys()
         self._refresh_status_loop()
+        self._poll_ui_queue()
         self._resize_after_id = None
         self._window_state_after_id = None
         self.bind("<Configure>", self._on_window_configure)
@@ -220,6 +225,76 @@ class BindXApp(ctk.CTk):
         )
         self.after(500, self._refresh_status_loop)
 
+    def _poll_ui_queue(self):
+        try:
+            while True:
+                item = self._ui_queue.get_nowait()
+                if item[0] == "config_sync_finish":
+                    _, action, result, error = item
+                    self._finish_config_sync(action, result, error)
+                elif item[0] == "config_sync_status":
+                    _, info, error = item
+                    self.overview_tab._finish_sync_status(info, error)
+        except queue.Empty:
+            pass
+        self.after(10, self._poll_ui_queue)
+
+    def _upload_config_to_git(self):
+        self._start_config_sync("upload")
+
+    def _download_config_from_git(self):
+        self._start_config_sync("download")
+
+    def _start_config_sync(self, action):
+        if self._config_sync_busy:
+            return
+        self._config_sync_busy = True
+        tab = self.overview_tab
+        tab.set_sync_buttons_busy(True)
+        tab.set_sync_status_text("同步中…（仅同步配置文件，不影响软件其他内容）")
+
+        def worker():
+            from .. import config_sync
+            try:
+                if action == "upload":
+                    result = config_sync.upload_config()
+                else:
+                    result = config_sync.download_config()
+            except Exception as exc:
+                self._ui_queue.put(("config_sync_finish", action, None, exc))
+            else:
+                self._ui_queue.put(("config_sync_finish", action, result, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_config_sync(self, action, result, error):
+        self._config_sync_busy = False
+        tab = self.overview_tab
+        tab.set_sync_buttons_busy(False)
+        label = "上传配置" if action == "upload" else "拉取配置"
+        if error is not None:
+            tab.set_sync_status_text("同步状态：%s失败" % label)
+            messagebox.showerror(label, "操作失败：\n%s" % error, parent=self)
+            tab.refresh_sync_status(force=True)
+            return
+        if action == "download":
+            try:
+                tab.apply_config_reload()
+            except Exception as exc:
+                messagebox.showerror(label, "配置文件已更新，但引擎重载失败：\n%s" % exc, parent=self)
+                return
+        tab.refresh_sync_status(force=True)
+        if action == "upload":
+            messagebox.showinfo(
+                label,
+                "本地配置已推送到 Git 远端（config 分支）。\n现在可以在另一台电脑上按「拉取配置」还原。",
+                parent=self,
+            )
+        else:
+            sha = (result or {}).get("sha", "")[:7]
+            messagebox.showinfo(label, "远端配置已拉取到本地，热键与鼠标映射已重新加载。\n同步提交：%s" % sha, parent=self)
+
+
     def _show_tray_menu(self):
         current_menu_font = menu_font(self)
         menu = tk.Menu(self, tearoff=0, font=current_menu_font)
@@ -252,6 +327,9 @@ class BindXApp(ctk.CTk):
         menu.add_command(label="重新安装 Hook", command=self._tray_reinstall_hooks)
         menu.add_command(label="导出配置", command=lambda: self.overview_tab.export_config())
         menu.add_command(label="导入配置", command=lambda: self.overview_tab.import_config())
+        menu.add_separator()
+        menu.add_command(label="上传配置到 Git", command=self._upload_config_to_git)
+        menu.add_command(label="从 Git 拉取配置", command=self._download_config_from_git)
         menu.add_separator()
         menu.add_command(label="退出", command=self._quit_app)
         self.tray.show_menu_at_cursor(menu)

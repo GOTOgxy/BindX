@@ -2,6 +2,7 @@
 """BindX UI: 主窗口页签（总览 / Hot Key / Mouse）。"""
 
 import json
+import threading
 import tkinter as tk
 from pathlib import Path
 
@@ -100,8 +101,22 @@ class OverviewTab(ctk.CTkFrame):
         )
         self.start_menu_shortcut_btn.pack(side=tk.LEFT)
 
+        sync_card = ctk.CTkFrame(self, corner_radius=10)
+        sync_card.pack(fill=tk.X, pady=(16, 0))
+        ctk.CTkLabel(sync_card, text="配置云同步（Git）", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 4)))
+        self.sync_status = ctk.CTkLabel(sync_card, text="同步状态：查询中…", anchor="w", text_color="#71717a", font=ui_font(self, 12))
+        self.sync_status.pack(anchor=tk.W, fill=tk.X, padx=scaled(self, 16), pady=(0, scaled(self, 8)))
+        sync_btn_row = ctk.CTkFrame(sync_card, fg_color="transparent")
+        sync_btn_row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        self.upload_sync_btn = ctk.CTkButton(sync_btn_row, text="上传配置", command=self._upload_sync, width=96)
+        self.upload_sync_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.download_sync_btn = ctk.CTkButton(sync_btn_row, text="拉取配置", command=self._download_sync, width=96, fg_color="#52525b", hover_color="#3f3f46")
+        self.download_sync_btn.pack(side=tk.LEFT)
+        self._sync_status_querying = False
+
         self.refresh_shortcut_buttons()
         self.refresh_status()
+        self.refresh_sync_status()
 
     def _start_hk(self):
         self.controller.start_hotkey()
@@ -252,17 +267,62 @@ class OverviewTab(ctk.CTkFrame):
             return
         try:
             config_store.save_root_config(raw)
-            self.controller.reload_all_config()
-            # reload 后 hotkey_manager 是新实例，同步引用，
-            # 避免标签页继续操作旧实例
-            self.app.hotkey_tab.manager = self.controller.hotkey_manager
-            self.refresh_status()
-            self.app.hotkey_tab._refresh_list()
-            self.app.mouse_tab.reload_config()
+            self.apply_config_reload()
         except Exception as e:
             messagebox.showerror("导入失败", str(e), parent=self)
             return
         messagebox.showinfo("导入成功", "配置已导入，热键与鼠标映射已重新加载。", parent=self)
+
+
+
+    def _upload_sync(self):
+        self.app._upload_config_to_git()
+
+    def _download_sync(self):
+        self.app._download_config_from_git()
+
+    def set_sync_buttons_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        self.upload_sync_btn.configure(state=state)
+        self.download_sync_btn.configure(state=state)
+
+    def set_sync_status_text(self, text):
+        self.sync_status.configure(text=text)
+
+    def refresh_sync_status(self, force=False):
+        if self._sync_status_querying and not force:
+            return
+        self._sync_status_querying = True
+
+        def worker():
+            from .. import config_sync
+            try:
+                info = config_sync.remote_status()
+            except Exception as exc:
+                self.app._ui_queue.put(("config_sync_status", None, str(exc)))
+            else:
+                self.app._ui_queue.put(("config_sync_status", info, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_sync_status(self, info, error):
+        self._sync_status_querying = False
+        if error:
+            self.sync_status.configure(text="同步状态：查询失败（%s）" % str(error)[:50])
+        elif info is None:
+            self.sync_status.configure(text="同步状态：远端还没有配置，按「上传配置」即可创建")
+        else:
+            self.sync_status.configure(text="远端最近同步：%s（%s）" % (info["time"], info["sha"][:7]))
+
+    def apply_config_reload(self):
+        """配置文件落盘后（导入/拉取）重载引擎并刷新界面。"""
+        self.controller.reload_all_config()
+        # reload 后 hotkey_manager 是新实例，同步引用，
+        # 避免标签页继续操作旧实例
+        self.app.hotkey_tab.manager = self.controller.hotkey_manager
+        self.refresh_status()
+        self.app.hotkey_tab._refresh_list()
+        self.app.mouse_tab.reload_config()
 
 
 
