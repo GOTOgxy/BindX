@@ -62,6 +62,7 @@ class OverviewTab(ctk.CTkFrame):
         btns_hk.pack(fill=tk.X, padx=16, pady=(0, 16))
         ctk.CTkButton(btns_hk, text="启动", command=self._start_hk, width=72).pack(side=tk.LEFT, padx=(0, 8))
         ctk.CTkButton(btns_hk, text="停止", command=self._stop_hk, width=72, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT)
+        ctk.CTkFrame(self.hk_card, fg_color="transparent").pack(fill=tk.BOTH, expand=True)
 
         self.mc_card = ctk.CTkFrame(self.cards, corner_radius=10)
         self.mc_card.grid(row=0, column=1, sticky=tk.NSEW, padx=(0, 8))
@@ -72,10 +73,11 @@ class OverviewTab(ctk.CTkFrame):
         btns_mc.pack(fill=tk.X, padx=16, pady=(0, 16))
         ctk.CTkButton(btns_mc, text="启动", command=self._start_mc, width=72).pack(side=tk.LEFT, padx=(0, 8))
         ctk.CTkButton(btns_mc, text="停止", command=self._stop_mc, width=72, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT)
+        ctk.CTkFrame(self.mc_card, fg_color="transparent").pack(fill=tk.BOTH, expand=True)
 
         actions = ctk.CTkFrame(self, corner_radius=10)
         actions.grid(row=2, column=0, sticky=tk.NSEW, pady=(16, 0))
-        ctk.CTkLabel(actions, text="全局动作", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 10)))
+        ctk.CTkLabel(actions, text="全局动作", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 12)))
         action_row = ctk.CTkFrame(actions, fg_color="transparent")
         action_row.pack(fill=tk.X, padx=16, pady=(0, 12))
         ctk.CTkButton(action_row, text="全部启动", command=self._start_all, width=88).pack(side=tk.LEFT, padx=(0, 8))
@@ -87,7 +89,7 @@ class OverviewTab(ctk.CTkFrame):
         ctk.CTkButton(action_row, text="退出 BindX", command=self.app._quit_app, width=104, fg_color="#991b1b", hover_color="#7f1d1d").pack(side=tk.RIGHT)
 
         settings_row = ctk.CTkFrame(actions, fg_color="transparent")
-        settings_row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        settings_row.pack(fill=tk.X, padx=16, pady=(0, 12))
         ctk.CTkLabel(settings_row, text="字体大小", font=ui_font(self, 14)).pack(side=tk.LEFT, padx=(0, 8))
         self.font_preset_menu = ctk.CTkOptionMenu(
             settings_row,
@@ -140,6 +142,7 @@ class OverviewTab(ctk.CTkFrame):
         self.upload_sync_btn.pack(side=tk.LEFT, padx=(0, 8))
         self.download_sync_btn = ctk.CTkButton(sync_btn_row, text="拉取配置", command=self._download_sync, width=88, fg_color="#52525b", hover_color="#3f3f46")
         self.download_sync_btn.pack(side=tk.LEFT)
+        ctk.CTkFrame(self.sync_card, fg_color="transparent").pack(fill=tk.BOTH, expand=True)
         self._sync_status_querying = False
 
         self.code_card = ctk.CTkFrame(self.sync_cards, corner_radius=10)
@@ -156,6 +159,7 @@ class OverviewTab(ctk.CTkFrame):
         self.pull_code_btn.pack(side=tk.LEFT, padx=(0, 8))
         self.push_code_btn = ctk.CTkButton(code_btn_row, text="上传代码", command=self._push_code, width=88)
         self.push_code_btn.pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkFrame(self.code_card, fg_color="transparent").pack(fill=tk.BOTH, expand=True)
         self._code_status_querying = False
         self.refresh_code_status()
         self.refresh_shortcut_buttons()
