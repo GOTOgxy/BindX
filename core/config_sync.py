@@ -63,14 +63,21 @@ def _friendly(stderr_text):
 
 
 def _run_git(args, cwd, env=None):
+    kwargs = {}
+    if os.name == "nt":
+        # 以 pythonw（无控制台）运行时，每个控制台子进程默认会弹一个
+        # 黑窗口；CREATE_NO_WINDOW 使其完全在后台运行。
+        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
     try:
         proc = subprocess.run(
             ["git", "-c", "color.ui=never"] + list(args),
             cwd=str(cwd),
             env=env if env is not None else _base_env(),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=GIT_TIMEOUT,
+            **kwargs,
         )
     except FileNotFoundError:
         raise ConfigSyncError("未找到 git 命令行工具，请先安装 git。")
