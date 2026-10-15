@@ -15,8 +15,15 @@ from .inspector import InputInspectorWindow
 from .theme import (BUTTON_DEFAULT_FG, BUTTON_DEFAULT_HOVER,
                     menu_font, scaled, ui_font)
 
-def _auto_wrap_label(label):
-    """标签自动换行：宽度不够时文本折行显示，而不是被截断。"""
+def _auto_wrap_label(label, initial_wraplength=None):
+    """标签自动换行：宽度不足时文本折行显示，而不是被截断。
+
+    initial_wraplength: 创建时使用的初始换行宽度（像素）。用于约束标签的布局请求宽度，
+    避免很长的状态文字撑大所在 grid 列、导致同一行的两张卡片宽窄不一；
+    控件实际布局完成后，换行宽度会随实际宽度实时更新。
+    """
+    if initial_wraplength:
+        label.configure(wraplength=initial_wraplength)
 
     def _on_configure(event):
         width = label.winfo_width()
@@ -26,21 +33,27 @@ def _auto_wrap_label(label):
     label.bind("<Configure>", _on_configure)
     return label
 
-
 class OverviewTab(ctk.CTkFrame):
     def __init__(self, parent, controller, app):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
         self.app = app
 
-        ctk.CTkLabel(self, text="引擎总览", font=ui_font(self, 20, "bold")).pack(anchor=tk.W, pady=(0, scaled(self, 16)))
+        # 行权重：卡片行（第 1、3 行）随窗口高度拉伸填满视口，
+        # 全局动作行（第 2 行）保持自然高度。
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=0)
+        self.grid_rowconfigure(3, weight=1)
+        ctk.CTkLabel(self, text="引擎总览", font=ui_font(self, 20, "bold")).grid(row=0, column=0, sticky=tk.W, pady=(0, scaled(self, 16)))
 
-        cards = ctk.CTkFrame(self, fg_color="transparent")
-        cards.pack(fill=tk.X)
-        cards.columnconfigure(0, weight=1)
-        cards.columnconfigure(1, weight=1)
+        self.cards = ctk.CTkFrame(self, fg_color="transparent")
+        self.cards.grid(row=1, column=0, sticky=tk.NSEW)
+        self.cards.columnconfigure(0, weight=1)
+        self.cards.columnconfigure(1, weight=1)
 
-        self.hk_card = ctk.CTkFrame(cards, corner_radius=10)
+        self.hk_card = ctk.CTkFrame(self.cards, corner_radius=10)
         self.hk_card.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
         ctk.CTkLabel(self.hk_card, text="热键引擎", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 6)))
         self.hk_status = ctk.CTkLabel(self.hk_card, text="运行中", anchor="w", font=ui_font(self, 13))
@@ -50,8 +63,8 @@ class OverviewTab(ctk.CTkFrame):
         ctk.CTkButton(btns_hk, text="启动", command=self._start_hk, width=72).pack(side=tk.LEFT, padx=(0, 8))
         ctk.CTkButton(btns_hk, text="停止", command=self._stop_hk, width=72, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT)
 
-        self.mc_card = ctk.CTkFrame(cards, corner_radius=10)
-        self.mc_card.grid(row=0, column=1, sticky=tk.NSEW)
+        self.mc_card = ctk.CTkFrame(self.cards, corner_radius=10)
+        self.mc_card.grid(row=0, column=1, sticky=tk.NSEW, padx=(0, 8))
         ctk.CTkLabel(self.mc_card, text="鼠标映射", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 6)))
         self.mc_status = ctk.CTkLabel(self.mc_card, text="运行中", anchor="w", font=ui_font(self, 13))
         self.mc_status.pack(anchor=tk.W, fill=tk.X, padx=16, pady=(0, 12))
@@ -61,7 +74,7 @@ class OverviewTab(ctk.CTkFrame):
         ctk.CTkButton(btns_mc, text="停止", command=self._stop_mc, width=72, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT)
 
         actions = ctk.CTkFrame(self, corner_radius=10)
-        actions.pack(fill=tk.X, pady=(16, 0))
+        actions.grid(row=2, column=0, sticky=tk.NSEW, pady=(16, 0))
         ctk.CTkLabel(actions, text="全局动作", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 10)))
         action_row = ctk.CTkFrame(actions, fg_color="transparent")
         action_row.pack(fill=tk.X, padx=16, pady=(0, 12))
@@ -108,16 +121,17 @@ class OverviewTab(ctk.CTkFrame):
         )
         self.start_menu_shortcut_btn.pack(side=tk.LEFT)
 
-        sync_cards = ctk.CTkFrame(self, fg_color="transparent")
-        sync_cards.pack(fill=tk.X, pady=(16, 0))
-        sync_cards.columnconfigure(0, weight=1)
-        sync_cards.columnconfigure(1, weight=1)
+        self.sync_cards = ctk.CTkFrame(self, fg_color="transparent")
+        self.sync_cards.grid(row=3, column=0, sticky=tk.NSEW, pady=(16, 0))
+        self.sync_cards.columnconfigure(0, weight=1)
+        self.sync_cards.columnconfigure(1, weight=1)
 
-        self.sync_card = ctk.CTkFrame(sync_cards, corner_radius=10)
+        self.sync_card = ctk.CTkFrame(self.sync_cards, corner_radius=10)
         self.sync_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         ctk.CTkLabel(self.sync_card, text="配置云同步（Git）", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 4)))
         self.sync_status = _auto_wrap_label(
-            ctk.CTkLabel(self.sync_card, text="同步状态：查询中…", anchor="w", text_color="#71717a", font=ui_font(self, 12))
+            ctk.CTkLabel(self.sync_card, text="同步状态：查询中…", anchor="w", text_color="#71717a", font=ui_font(self, 12)),
+            initial_wraplength=scaled(self, 150),
         )
         self.sync_status.pack(anchor=tk.W, fill=tk.X, padx=scaled(self, 16), pady=(0, scaled(self, 8)))
         sync_btn_row = ctk.CTkFrame(self.sync_card, fg_color="transparent")
@@ -128,11 +142,12 @@ class OverviewTab(ctk.CTkFrame):
         self.download_sync_btn.pack(side=tk.LEFT)
         self._sync_status_querying = False
 
-        self.code_card = ctk.CTkFrame(sync_cards, corner_radius=10)
-        self.code_card.grid(row=0, column=1, sticky="nsew")
+        self.code_card = ctk.CTkFrame(self.sync_cards, corner_radius=10)
+        self.code_card.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
         ctk.CTkLabel(self.code_card, text="代码同步（Git）", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 4)))
         self.code_status = _auto_wrap_label(
-            ctk.CTkLabel(self.code_card, text="代码状态：查询中……", anchor="w", text_color="#71717a", font=ui_font(self, 12))
+            ctk.CTkLabel(self.code_card, text="代码状态：查询中……", anchor="w", text_color="#71717a", font=ui_font(self, 12)),
+            initial_wraplength=scaled(self, 150),
         )
         self.code_status.pack(anchor=tk.W, fill=tk.X, padx=scaled(self, 16), pady=(0, scaled(self, 8)))
         code_btn_row = ctk.CTkFrame(self.code_card, fg_color="transparent")
@@ -146,6 +161,68 @@ class OverviewTab(ctk.CTkFrame):
         self.refresh_shortcut_buttons()
         self.refresh_status()
         self.refresh_sync_status()
+
+        # 强制两列等宽：等布局完成后，根据容器宽度计算每列应该的宽度
+
+        def _force_equal_width():
+
+            # cards 容器
+
+            cards_width = self.cards.winfo_width()
+
+            col_width = cards_width // 2  # 每列占容器宽度的一半
+
+            self.cards.columnconfigure(0, minsize=col_width)
+
+            self.cards.columnconfigure(1, minsize=col_width)
+
+            # sync_cards 容器
+
+            sync_width = self.sync_cards.winfo_width()
+
+            sync_col_width = sync_width // 2
+
+            self.sync_cards.columnconfigure(0, minsize=sync_col_width)
+
+            self.sync_cards.columnconfigure(1, minsize=sync_col_width)
+
+            # 强制设置卡片宽度相同
+
+            card_width = (self.cards.winfo_width() - 8) // 2
+
+            self.hk_card.configure(width=card_width)
+
+            self.mc_card.configure(width=card_width)
+
+            self.sync_card.configure(width=card_width)
+
+            self.code_card.configure(width=card_width)
+
+            # 强制设置状态标签的 wraplength 为相同值
+
+            min_wrap = card_width - 32  # 减去卡片内部 padx
+
+            self.sync_status.configure(wraplength=min_wrap)
+
+            self.code_status.configure(wraplength=min_wrap)
+
+            # 解绑 _on_configure 事件，阻止后续更新
+
+            self.sync_status.unbind('<Configure>')
+
+            self.code_status.unbind('<Configure>')
+
+            # 强制更新布局
+
+            self.update_idletasks()
+
+        def _on_resize(event=None):
+
+            self.after(100, _force_equal_width)
+
+        self.bind('<Configure>', _on_resize)
+
+        self.after(500, _force_equal_width)
 
     def _start_hk(self):
         self.controller.start_hotkey()
