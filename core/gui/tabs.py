@@ -113,6 +113,20 @@ class OverviewTab(ctk.CTkFrame):
         self.download_sync_btn = ctk.CTkButton(sync_btn_row, text="拉取配置", command=self._download_sync, width=96, fg_color="#52525b", hover_color="#3f3f46")
         self.download_sync_btn.pack(side=tk.LEFT)
         self._sync_status_querying = False
+        code_card = ctk.CTkFrame(self, corner_radius=10)
+        code_card.pack(fill=tk.X, pady=(16, 0))
+        ctk.CTkLabel(code_card, text="代码同步（Git）", font=ui_font(self, 15, "bold")).pack(anchor=tk.W, padx=scaled(self, 16), pady=(scaled(self, 14), scaled(self, 4)))
+        self.code_status = ctk.CTkLabel(code_card, text="代码状态：查询中……", anchor="w", text_color="#71717a", font=ui_font(self, 12))
+        self.code_status.pack(anchor=tk.W, fill=tk.X, padx=scaled(self, 16), pady=(0, scaled(self, 8)))
+        code_btn_row = ctk.CTkFrame(code_card, fg_color="transparent")
+        code_btn_row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        self.pull_code_btn = ctk.CTkButton(code_btn_row, text="下载代码", command=self._pull_code, width=96)
+        self.pull_code_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.push_code_btn = ctk.CTkButton(code_btn_row, text="上传代码", command=self._push_code, width=96)
+        self.push_code_btn.pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkButton(code_btn_row, text="重新启动", command=self._restart_app, width=96, fg_color="#52525b", hover_color="#3f3f46").pack(side=tk.LEFT)
+        self._code_status_querying = False
+        self.refresh_code_status()
 
         self.refresh_shortcut_buttons()
         self.refresh_status()
@@ -313,6 +327,59 @@ class OverviewTab(ctk.CTkFrame):
             self.sync_status.configure(text="同步状态：远端还没有配置，按「上传配置」即可创建")
         else:
             self.sync_status.configure(text="远端最近同步：%s（%s）" % (info["time"], info["sha"][:7]))
+
+
+    def _pull_code(self):
+        self.app._pull_code_from_git()
+
+    def _push_code(self):
+        self.app._push_code_to_git()
+
+    def _restart_app(self):
+        self.app._restart_app()
+
+    def set_code_buttons_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        self.pull_code_btn.configure(state=state)
+        self.push_code_btn.configure(state=state)
+
+    def set_code_status_text(self, text):
+        self.code_status.configure(text=text)
+
+    def refresh_code_status(self, force=False):
+        if self._code_status_querying and not force:
+            return
+        self._code_status_querying = True
+
+        def worker():
+            from .. import code_sync
+            try:
+                info = code_sync.code_status()
+            except Exception as exc:
+                self.app._ui_queue.put(("code_sync_status", None, str(exc)))
+            else:
+                self.app._ui_queue.put(("code_sync_status", info, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_code_status(self, info, error):
+        self._code_status_querying = False
+        if error:
+            self.code_status.configure(text="代码状态：查询失败（%s）" % str(error)[:50])
+        elif info is None:
+            self.code_status.configure(text="代码状态：远端还没有 main 分支，先按「上传代码」")
+        elif info["ahead"] == 0 and info["behind"] == 0:
+            self.code_status.configure(text="代码状态：与远端一致（%s）" % info["local_sha"][:7])
+        else:
+            parts = []
+            if info["ahead"]:
+                parts.append("本地领先 %d 个提交（未推送）" % info["ahead"])
+            if info["behind"]:
+                parts.append("落后远端 %d 个提交" % info["behind"])
+            self.code_status.configure(
+                text="代码状态：%s（本地 %s / 远端 %s）"
+                % ("，".join(parts), info["local_sha"][:7], info["remote_sha"][:7])
+            )
 
     def apply_config_reload(self):
         """配置文件落盘后（导入/拉取）重载引擎并刷新界面。"""

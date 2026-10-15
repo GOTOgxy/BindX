@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """BindX UI: 主应用入口（BindXApp）。"""
 
+import os
 import queue
 import threading
 import tkinter as tk
@@ -19,6 +20,7 @@ class BindXApp(ctk.CTk):
         super().__init__()
         self.controller = controller
         self._config_sync_busy = False
+        self._code_sync_busy = False
         self._ui_queue = queue.Queue()
         self._default_geometry = None
         self.ui_scale = _compute_ui_scale(self)
@@ -235,6 +237,12 @@ class BindXApp(ctk.CTk):
                 elif item[0] == "config_sync_status":
                     _, info, error = item
                     self.overview_tab._finish_sync_status(info, error)
+                elif item[0] == "code_sync_finish":
+                    _, action, result, error = item
+                    self._finish_code_sync(action, result, error)
+                elif item[0] == "code_sync_status":
+                    _, info, error = item
+                    self.overview_tab._finish_code_status(info, error)
         except queue.Empty:
             pass
         self.after(10, self._poll_ui_queue)
@@ -295,6 +303,111 @@ class BindXApp(ctk.CTk):
             messagebox.showinfo(label, "远端配置已拉取到本地，热键与鼠标映射已重新加载。\n同步提交：%s" % sha, parent=self)
 
 
+    def _pull_code_from_git(self):
+        self._start_code_sync("pull")
+
+    def _push_code_to_git(self):
+        self._start_code_sync("push")
+
+    def _start_code_sync(self, action):
+        if self._code_sync_busy:
+            return
+        self._code_sync_busy = True
+        tab = self.overview_tab
+        tab.set_code_buttons_busy(True)
+        if action == "pull":
+            tab.set_code_status_text("正在下载代码，请稍候……")
+        else:
+            tab.set_code_status_text("正在上传代码：先提交本地改动，再推送到远端……")
+
+        def worker():
+            from .. import code_sync
+            try:
+                if action == "pull":
+                    result = code_sync.pull_code()
+                else:
+                    result = code_sync.push_code()
+            except Exception as exc:
+                self._ui_queue.put(("code_sync_finish", action, None, exc))
+            else:
+                self._ui_queue.put(("code_sync_finish", action, result, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_code_sync(self, action, result, error):
+        self._code_sync_busy = False
+        tab = self.overview_tab
+        tab.set_code_buttons_busy(False)
+        label = "下载代码" if action == "pull" else "上传代码"
+        if error is not None:
+            tab.set_code_status_text("代码状态：%s失败" % label)
+            messagebox.showerror(label, "操作失败：\n%s" % error, parent=self)
+            tab.refresh_code_status(force=True)
+            return
+        if action == "pull":
+            if result.get("updated"):
+                count = len(result.get("files") or [])
+                messagebox.showinfo(
+                    label,
+                    "已拉到最新代码（%s），共更新 %d 个文件。\n如果代码有变化，请按「重新启动」让新代码生效。"
+                    % (result["sha"][:7], count),
+                    parent=self,
+                )
+            else:
+                messagebox.showinfo(
+                    label, "本地代码已经是最新的（%s）。" % result["sha"][:7], parent=self
+                )
+        else:
+            if result.get("committed"):
+                messagebox.showinfo(
+                    label,
+                    "本地改动已提交并推送到 Git 远端（main 分支）。\n提交：%s\n其他机器现在可以按「下载代码」获取最新代码。"
+                    % result["sha"][:7],
+                    parent=self,
+                )
+            else:
+                messagebox.showinfo(
+                    label,
+                    "没有发现本地改动（本地配置等被忽略的文件不会上传）。",
+                    parent=self,
+                )
+        tab.refresh_code_status(force=True)
+
+    def _restart_app(self):
+        if getattr(self, "_restarting", False):
+            return
+        self._restarting = True
+        from .. import restart as restart_mod
+        from .. import single_instance
+
+        try:
+            interpreter, script, extra = restart_mod.build_restart_command()
+        except Exception as exc:
+            messagebox.showerror("重新启动", "无法重启：\n%s" % exc, parent=self)
+            self._restarting = False
+            return
+        self._persist_window_state()
+        try:
+            self.controller.quit()
+        except Exception:
+            pass
+        single_instance.release()
+        try:
+            restart_mod.spawn_new_instance(interpreter, script, extra)
+        except Exception as exc:
+            messagebox.showerror(
+                "重新启动",
+                "新实例启动失败，当前进程保留（钩子已停止，可手动重新启用）：\n%s" % exc,
+                parent=self,
+            )
+            self._restarting = False
+            return
+        try:
+            self.tray.destroy()
+        except Exception:
+            pass
+        os._exit(0)
+
     def _show_tray_menu(self):
         current_menu_font = menu_font(self)
         menu = tk.Menu(self, tearoff=0, font=current_menu_font)
@@ -330,6 +443,9 @@ class BindXApp(ctk.CTk):
         menu.add_separator()
         menu.add_command(label="上传配置到 Git", command=self._upload_config_to_git)
         menu.add_command(label="从 Git 拉取配置", command=self._download_config_from_git)
+        menu.add_command(label="下载代码", command=self._pull_code_from_git)
+        menu.add_command(label="上传代码", command=self._push_code_to_git)
+        menu.add_command(label="重新启动", command=self._restart_app)
         menu.add_separator()
         menu.add_command(label="退出", command=self._quit_app)
         self.tray.show_menu_at_cursor(menu)
