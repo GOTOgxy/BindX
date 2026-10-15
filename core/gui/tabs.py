@@ -212,17 +212,25 @@ class OverviewTab(ctk.CTkFrame):
 
             self.code_status.unbind('<Configure>')
 
-            # 强制更新布局
+            
 
-            self.update_idletasks()
+        # 防抖：窗口大小变化后延迟执行，避免频繁触发
+
+        self._resize_timer = None
 
         def _on_resize(event=None):
 
-            self.after(100, _force_equal_width)
+            if self._resize_timer:
+
+                self.after_cancel(self._resize_timer)
+
+            self._resize_timer = self.after(150, _force_equal_width)
 
         self.bind('<Configure>', _on_resize)
 
-        self.after(500, _force_equal_width)
+        # 初始化时执行一次
+
+        self.after(200, _force_equal_width)
 
     def _start_hk(self):
         self.controller.start_hotkey()
