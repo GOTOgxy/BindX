@@ -7,25 +7,32 @@
   文件的提交并 push。全程使用 git 底层命令（hash-object / 临时索引 /
   commit-tree / update-ref），不 checkout、不 pull、不 merge、不改动
   工作区与 main 分支。
-- 拉取：fetch 同步分支，取出其中唯一的配置文件，原子替换本地文件
-  （替换前保留 .bak），随后由 UI 层重载引擎使新配置立即生效。
+- 拉取：fetch 同步分支，取出其中唯一的配置文件，原子替换本地文件，
+  随后由 UI 层重载引擎使新配置立即生效。
 
 远端不存在同步分支时，首次上传会自动创建。冲突语义为「后写覆盖先写」。
 """
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 
 BRANCH = "config"
+SYNC_REF = "refs/remotes/origin/" + BRANCH
 CONFIG_PATH = "data/bindx_config.json"
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parent.parent
 GIT_TIMEOUT = 120
 MAX_PUSH_ATTEMPTS = 3
+
+# 全局 git 互斥锁：整台机器只有一个仓库（同一份 index / refs / 对象库）。
+# 「配置云同步」和「代码同步」各自在后台线程里跑 git，并发时两个 fetch 会
+# 互相踩 FETCH_HEAD 与 packed-refs.lock，偶发报错甚至写坏引用。
+# 所有 git 调用一律串行化（RLock：同一线程内嵌套调用也安全）。
+_GIT_LOCK = threading.RLock()
 
 
 class ConfigSyncError(Exception):
@@ -69,16 +76,17 @@ def _run_git(args, cwd, env=None):
         # 黑窗口；CREATE_NO_WINDOW 使其完全在后台运行。
         kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
     try:
-        proc = subprocess.run(
-            ["git", "-c", "color.ui=never"] + list(args),
-            cwd=str(cwd),
-            env=env if env is not None else _base_env(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=GIT_TIMEOUT,
-            **kwargs,
-        )
+        with _GIT_LOCK:
+            proc = subprocess.run(
+                ["git", "-c", "color.ui=never"] + list(args),
+                cwd=str(cwd),
+                env=env if env is not None else _base_env(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=GIT_TIMEOUT,
+                **kwargs,
+            )
     except FileNotFoundError:
         raise ConfigSyncError("未找到 git 命令行工具，请先安装 git。")
     except subprocess.TimeoutExpired:
@@ -89,28 +97,73 @@ def _run_git(args, cwd, env=None):
     return proc.stdout.decode("utf-8", "replace")
 
 
+def _commit_info(cwd, ref):
+    """一次本地 git 调用取 (sha, 提交时间 ISO8601)。"""
+    out = _run_git(["log", "-1", "--format=%H %cI", ref], cwd).strip()
+    sha, _, time_str = out.partition(" ")
+    return sha, time_str
+
+
+_VERIFIED_REPOS = set()
+
+
 def _require_repo(cwd):
-    out = _run_git(["rev-parse", "--is-inside-work-tree"], cwd)
-    if out.strip() != "true":
-        raise ConfigSyncError("该目录不是 git 仓库：%s" % cwd)
+    """一次 git 调用同时确认「是仓库」和「配了 origin」（少一次进程启动）。
+
+    结果按仓库路径缓存：origin 不会在运行期间凭空消失，而 Windows 上每
+    启动一个 git 子进程约 60ms，四个同步按钮每点一次都能省掉这一趟。
+    """
+    key = str(Path(cwd).resolve())
+    if key in _VERIFIED_REPOS:
+        return
     try:
         _run_git(["remote", "get-url", "origin"], cwd)
-    except ConfigSyncError:
+    except ConfigSyncError as exc:
+        text = str(exc).lower()
+        if "不是 git 仓库" in str(exc) or "not a git repository" in text:
+            raise ConfigSyncError("该目录不是 git 仓库：%s" % cwd)
         raise ConfigSyncError("仓库未配置 origin 远端，无法同步。")
+    _VERIFIED_REPOS.add(key)
 
 
-def _remote_branch_tip(cwd):
-    """返回远端同步分支的 sha；分支尚不存在时返回 None。"""
-    out = _run_git(["ls-remote", "--heads", "origin", BRANCH], cwd)
-    lines = [line for line in out.splitlines() if line.strip()]
-    if not lines:
-        return None
-    return lines[0].split()[0]
+def _missing_remote_ref(error_text):
+    return "couldn't find remote ref" in (error_text or "").lower()
 
 
 def _fetch_sync_branch(cwd):
-    _run_git(["fetch", "origin", BRANCH, "--quiet"], cwd)
-    return _run_git(["rev-parse", "--verify", "refs/remotes/origin/" + BRANCH], cwd).strip()
+    """fetch 远端同步分支；分支还不存在时返回 False。
+
+    只发一次网络请求（旧实现是 ls-remote + fetch 两次）。fetch 成功后
+    git 会顺带更新 refs/remotes/origin/config，所以不需要再 rev-parse 一次。
+    """
+    try:
+        _run_git(["fetch", "origin", BRANCH, "--no-tags", "--quiet"], cwd)
+    except ConfigSyncError as exc:
+        if _missing_remote_ref(str(exc)):
+            return False
+        raise
+    return True
+
+
+def fetch_all_refs(repo_root=None):
+    """一次网络往返把所有远端分支引用（main + config）同步到本地。
+
+    界面上「配置云同步」和「代码同步」两块状态过去各自 fetch 一次；
+    SSH 连 GitHub 光握手就要 4~5 秒，启动时等于白等两轮，而且两个
+    线程还会被全局 git 锁串起来。改成用默认 refspec 一次拉全部分支，
+    之后两块状态都只读本地引用（零网络）。
+    """
+    cwd = Path(repo_root) if repo_root else DEFAULT_REPO_ROOT
+    _require_repo(cwd)
+    _run_git(["fetch", "origin", "--no-tags", "--quiet"], cwd)
+
+
+def _local_sync_tip(cwd):
+    """本地已知的远端同步分支 tip（纯本地，无网络）；不知道时返回 None。"""
+    try:
+        return _run_git(["rev-parse", "--verify", "--quiet", SYNC_REF], cwd).strip() or None
+    except ConfigSyncError:
+        return None
 
 
 def _build_config_commit(cwd, blob, base_tip, stamp):
@@ -164,24 +217,23 @@ def upload_config(repo_root=None):
     blob = _run_git(["hash-object", "-w", CONFIG_PATH], cwd).strip()
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    for _ in range(MAX_PUSH_ATTEMPTS):
-        base_tip = None
-        if _remote_branch_tip(cwd) is not None:
-            # 远端分支已存在：先 fetch，新提交的父提交取远端最新 tip，
-            # 保证 push 是 fast-forward，不会覆盖别人刚推的配置。
-            _fetch_sync_branch(cwd)
-            base_tip = _run_git(
-                ["rev-parse", "--verify", "refs/remotes/origin/" + BRANCH], cwd
-            ).strip()
-        commit = _build_config_commit(cwd, blob, base_tip, stamp)
-        _run_git(["update-ref", "refs/heads/" + BRANCH, commit], cwd)
+    # 直接基于「本地已知的远端 tip」造提交并 push。
+    # 单人多机使用时远端极少被别人改动，这样一次网络往返就能上传完
+    # （旧实现每次都要先 fetch 再 push，等于两次往返、慢一倍）。
+    # push 被拒说明远端确实前进了：fetch 最新 tip 后重建提交再推。
+    for attempt in range(MAX_PUSH_ATTEMPTS):
+        commit = _build_config_commit(cwd, blob, _local_sync_tip(cwd), stamp)
         try:
-            _run_git(["push", "origin", BRANCH], cwd)
-            return {"sha": commit}
+            _run_git(["push", "origin", "%s:refs/heads/%s" % (commit, BRANCH)], cwd)
+            # 提交是本地刚造出来的：sha 已知、时间就是 stamp，
+            # 不必再启动一个 git log 子进程去问一遍。
+            return {"sha": commit, "time": stamp}
         except ConfigSyncError as exc:
             if not _is_rejected_push(str(exc)):
                 raise
-            # 远端 tip 在我们 push 前又前进了：回到循环顶部基于最新 tip 重建
+            if attempt == MAX_PUSH_ATTEMPTS - 1:
+                break
+            _fetch_sync_branch(cwd)
     raise ConfigSyncError("上传失败：远端分支有并发更新，请再试一次。")
 
 
@@ -190,41 +242,36 @@ def download_config(repo_root=None):
     cwd = Path(repo_root) if repo_root else DEFAULT_REPO_ROOT
     cfg = cwd / CONFIG_PATH
     _require_repo(cwd)
-    if _remote_branch_tip(cwd) is None:
+    if not _fetch_sync_branch(cwd):
         raise ConfigSyncError("远端还没有配置分支，请先在本机按「上传配置」推送一次。")
-    _fetch_sync_branch(cwd)
-    sha = _run_git(["rev-parse", "--verify", "refs/remotes/origin/" + BRANCH], cwd).strip()
-    content = _run_git(["show", "refs/remotes/origin/" + BRANCH + ":" + CONFIG_PATH], cwd)
+    content = _run_git(["show", SYNC_REF + ":" + CONFIG_PATH], cwd)
     try:
         parsed = json.loads(content)
     except ValueError:
         raise ConfigSyncError("远端配置不是合法 JSON，已放弃写入，本地文件未改动。")
     if not isinstance(parsed, dict):
         raise ConfigSyncError("远端配置格式无效（不是 JSON 对象），本地文件未改动。")
-    if cfg.exists():
-        try:
-            shutil.copy2(cfg, str(cfg) + ".bak")
-        except OSError:
-            pass
     tmp = cfg.with_name(cfg.name + ".tmp")
     tmp.write_bytes(content.encode("utf-8"))
     os.replace(tmp, cfg)
-    return {"sha": sha}
+    sha, time_str = _commit_info(cwd, SYNC_REF)
+    return {"sha": sha, "time": time_str}
 
 
-def remote_status(repo_root=None):
+def remote_status(repo_root=None, refresh=True):
     """查询远端同步分支状态，用于界面展示。
+
+    refresh=False 时完全不联网，只读本地已知的远端引用——配合
+    fetch_all_refs() 一次性刷新两块状态时用，避免第二次 SSH 往返。
 
     返回 {"sha": ..., "time": ...}；分支尚不存在时返回 None；
     网络/仓库错误抛出 ConfigSyncError。
     """
     cwd = Path(repo_root) if repo_root else DEFAULT_REPO_ROOT
     _require_repo(cwd)
-    tip = _remote_branch_tip(cwd)
-    if tip is None:
+    if refresh and not _fetch_sync_branch(cwd):
         return None
-    _run_git(["fetch", "origin", BRANCH, "--quiet"], cwd)
-    time_str = _run_git(
-        ["log", "-1", "--format=%cI", "refs/remotes/origin/" + BRANCH], cwd
-    ).strip()
-    return {"sha": tip, "time": time_str}
+    if not _local_sync_tip(cwd):
+        return None
+    sha, time_str = _commit_info(cwd, SYNC_REF)
+    return {"sha": sha, "time": time_str}

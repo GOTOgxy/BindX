@@ -3,7 +3,6 @@
 import copy
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -77,11 +76,6 @@ def _write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    if path.exists():
-        try:
-            shutil.copy2(path, str(path) + ".bak")
-        except OSError:
-            pass
     os.replace(tmp_path, path)
 
 

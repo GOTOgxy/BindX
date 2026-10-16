@@ -4,7 +4,7 @@
 用临时目录构造「bare origin + clone」验证：
 - 上传只在远端 config 分支上生成一个只含配置文件的提交；
 - 上传不触碰工作区、不移动 main；
-- 拉取把远端版本原子恢复到本地并保留 .bak；
+- 拉取把远端版本原子恢复到本地（不再保留 .bak）；
 - 远端无分支 / 远端内容非法时的错误路径。
 """
 
@@ -98,15 +98,14 @@ class ConfigSyncTests(unittest.TestCase):
         status = _git(self.repo, "status", "--porcelain").stdout.decode()
         self.assertIn("other.txt", status)
 
-    def test_download_restores_remote_version_and_keeps_bak(self):
+    def test_download_restores_remote_version_without_bak(self):
         config_sync.upload_config(repo_root=self.repo)
         original = self._read_cfg()
         with open(self.cfg_path, "w", encoding="utf-8") as f:
             f.write(original.replace("v1", "local-edit"))
         config_sync.download_config(repo_root=self.repo)
         self.assertEqual(self._read_cfg(), original)
-        with open(self.cfg_path + ".bak", "r", encoding="utf-8") as f:
-            self.assertIn("local-edit", f.read())
+        self.assertFalse(os.path.exists(self.cfg_path + ".bak"))
 
     def test_download_requires_remote_branch(self):
         with self.assertRaises(config_sync.ConfigSyncError):

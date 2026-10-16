@@ -19,6 +19,8 @@ from ctypes import wintypes
 from tkinter import ttk, messagebox, filedialog
 
 import customtkinter as ctk
+from customtkinter.windows.widgets.scaling.scaling_tracker import \
+    ScalingTracker
 
 from .. import config_proxy, shortcut_manager
 from ..tray import TrayIcon
@@ -52,6 +54,79 @@ def _compute_ui_scale(root):
 def scaled(widget, value):
     scale = getattr(widget.winfo_toplevel(), "ui_scale", 1.0)
     return int(round(value * scale))
+
+
+def _widget_scale(widget):
+    """CTk「逻辑 -> 物理」的控件缩放系数（系统 DPI 缩放 x set_widget_scaling）。
+
+    winfo_width()/winfo_reqwidth() 返回物理像素，而 CTk 的 width /
+    wraplength / padx 等选项接收逻辑值、内部再乘这个系数。
+    注意不是 ui_scale：ui_scale 只影响字体档位，DPI 缩放在这里。
+    """
+    try:
+        scale = ScalingTracker.get_widget_scaling(widget)
+    except Exception:
+        scale = getattr(widget.winfo_toplevel(), "ui_scale", 1.0) or 1.0
+    return scale or 1.0
+
+
+def unscaled(widget, pixels):
+    """物理像素 -> 逻辑像素（喂给 CTk 的 width / wraplength 等选项前必须换算）。"""
+    return int(round(pixels / _widget_scale(widget)))
+
+
+def rescaled(widget, value):
+    """逻辑像素 -> 物理像素（与 winfo_* 实测值同单位，用于布局阈值比较）。"""
+    return int(round(value * _widget_scale(widget)))
+
+
+def _noop(*_args, **_kwargs):
+    return None
+
+
+def suppress_draw_flush(widget):
+    """屏蔽 CTk 控件 _draw() 结尾那句 update_idletasks()。
+
+    CTkOptionMenu._draw / CTkScrollbar._draw 的最后都会调用
+    `self._canvas.update_idletasks()`：它同步冲刷整棵窗口树的待处理几何
+    事件。窗口缩放时控件本来就在一次重排里被逐个重绘，这句会让「重排里
+    再套重排」，实测单次重排耗时翻数倍，是 resize 卡顿的主因之一。
+
+    重绘期间临时把它换成空函数即可：真正的冲刷交给事件循环的正常空档，
+    最终画面完全一致。
+    """
+    canvas = getattr(widget, '_canvas', None)
+    original_draw = getattr(widget, '_draw', None)
+    if canvas is None or original_draw is None:
+        return widget
+
+    def _draw_without_flush(no_color_updates=False):
+        canvas.update_idletasks = _noop
+        try:
+            original_draw(no_color_updates)
+        finally:
+            try:
+                del canvas.update_idletasks
+            except AttributeError:
+                pass
+
+    widget._draw = _draw_without_flush
+    return widget
+
+
+def set_label_text(label, text):
+    """文本没变就不要 configure。
+
+    CTkLabel.configure(text=...) 每次都会整块重绘 canvas 并把窗口标脏；
+    500ms 一次的状态轮询如果无条件写回同样的文字，拖动窗口时会额外
+    叠加大面积重绘（高 DPI 下尤其明显）。
+    """
+    try:
+        if label.cget("text") == text:
+            return
+    except Exception:
+        pass
+    label.configure(text=text)
 
 
 def ui_font(widget, size, weight=None):
