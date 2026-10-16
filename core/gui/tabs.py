@@ -425,7 +425,15 @@ class OverviewTab(ctk.CTkFrame):
         """行容器池：只在行数变多时新建，不反复创建/销毁控件。"""
         rows = self._flow_row_pool.setdefault(key, [])
         while len(rows) < count:
-            rows.append(ctk.CTkFrame(container, fg_color="transparent"))
+            row = ctk.CTkFrame(container, fg_color="transparent")
+            # 格子是 container 的子窗口（grid(in_=row) 只换几何容器、不换
+            # 窗口树），所以行框与格子是同一层的兄弟窗口：Tk 按创建顺序
+            # 叠放，后创建的行框会压在格子上面。CTkFrame 即使 fg_color=
+            # "transparent"，内部 canvas 也是一块不透明的 Tk 窗口（底色取
+            # 父容器背景色），正好把整排按钮盖成一片空白——「全局动作全空」
+            # 就是这个原因。新建的行框一律沉到最底层，格子/按钮才能露出来。
+            row.lower()
+            rows.append(row)
         return rows
 
     def _flow_layout(self, container, cells, part, key, ref):
