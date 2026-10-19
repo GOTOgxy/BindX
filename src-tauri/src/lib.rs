@@ -15,8 +15,19 @@ use tauri::{Manager, WindowEvent};
 pub fn log_panic(info: &std::panic::PanicHookInfo) {
     use std::fs::OpenOptions;
     use std::io::Write;
+    let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = info.payload().downcast_ref::<String>() {
+        s.clone()
+    } else {
+        format!("{:?}", info)
+    };
+    if msg.contains("0x800700AA") || msg.contains("请求的资源在使用中") {
+        return;
+    }
+    let loc = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_default();
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("bindx_error.log") {
-        let _ = writeln!(f, "PANIC: {:?}", info);
+        let _ = writeln!(f, "[PANIC at {}] {}", loc, msg);
     }
 }
 
@@ -31,30 +42,23 @@ pub fn run() {
     let hotkey_engine = Arc::new(HotkeyEngine::new());
     let remap_engine = Arc::new(RemapEngine::new());
 
-    // If configured to run, start engines
-    if cfg.app.hotkey_running {
-        hotkey_engine.start(cfg.hotkeys.entries.clone());
-    }
-    if cfg.app.mouse_running {
-        remap_engine.start(cfg.mouse.clone());
-    }
-
     let hotkey_engine_clone = hotkey_engine.clone();
     let remap_engine_clone = remap_engine.clone();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-        }))
         .manage(AppState {
             hotkey_engine: hotkey_engine_clone,
             remap_engine: remap_engine_clone,
         })
         .setup(move |app| {
+            // Start engines if enabled in configuration
+            if cfg.app.hotkey_running {
+                hotkey_engine.start(cfg.hotkeys.entries.clone());
+            }
+            if cfg.app.mouse_running {
+                remap_engine.start(cfg.mouse.clone());
+            }
+
             // Setup system tray
             let _ = tray::setup_tray(app.handle());
 
