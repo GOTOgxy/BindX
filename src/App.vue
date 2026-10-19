@@ -79,7 +79,7 @@
     <!-- Main Workspace Layout -->
     <div class="app-body">
       <!-- Sidebar Navigation -->
-      <nav class="sidebar">
+      <nav class="sidebar" :style="{ width: `${sidebarWidth}px` }">
         <button 
           v-for="item in navItems" 
           :key="item.id"
@@ -88,7 +88,7 @@
           @click="currentTab = item.id"
         >
           <component :is="item.icon" class="tab-icon" />
-          <span>{{ item.label }}</span>
+          <span class="tab-label">{{ item.label }}</span>
           <span v-if="item.badge" class="nav-badge">{{ item.badge }}</span>
         </button>
 
@@ -107,6 +107,17 @@
           </div>
         </div>
       </nav>
+
+      <!-- Sidebar Resizer Splitter -->
+      <div 
+        class="sidebar-resizer" 
+        :class="{ resizing: isResizingSidebar }"
+        @mousedown="startSidebarResize"
+        @dblclick="resetSidebarWidth"
+        title="按住左右拖动调节侧边栏宽度，双击恢复默认"
+      >
+        <div class="resizer-line"></div>
+      </div>
 
       <!-- Content Area -->
       <main class="content-panel">
@@ -428,8 +439,8 @@
               class="detector-pad" 
               :class="{ active: isDetectingPadFocused }"
               tabindex="0"
-              @focus="isDetectingPadFocused = true"
-              @blur="isDetectingPadFocused = false"
+              @focus="onDetectorFocus"
+              @blur="onDetectorBlur"
               @keydown="onDetectorKeyDown"
               @pointerdown="onDetectorPointerDown"
               @contextmenu.prevent
@@ -491,9 +502,9 @@
                 </div>
               </div>
               <div class="flex items-center gap-3">
-                <div class="engine-badge-pill" :class="{ active: config.app.mouse_running }">
+                <div class="engine-badge-pill" :class="{ active: config.app?.mouse_running }">
                   <span class="dot"></span>
-                  <span>映射监听: {{ config.app.mouse_running ? '运行中' : '已暂停' }}</span>
+                  <span>映射监听: {{ config.app?.mouse_running ? '运行中' : '已暂停' }}</span>
                 </div>
                 <button class="btn btn-primary text-xs" @click="openAddRemapModal()">+ 添加映射</button>
               </div>
@@ -512,7 +523,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(km, idx) in config.mouse.mappings" :key="idx">
+                  <tr v-for="(km, idx) in (config.mouse?.mappings || [])" :key="idx">
                     <td>
                       <label class="toggle-switch mini">
                         <input type="checkbox" v-model="km.enabled" @change="saveAll" />
@@ -522,7 +533,7 @@
                     <td>
                       <div class="flex gap-1.5 items-center flex-wrap">
                         <span 
-                          v-for="k in km.trigger" 
+                          v-for="k in (km.trigger || [])" 
                           :key="k" 
                           class="keycap"
                           :class="{ mouse: isMouseKey(k) }"
@@ -536,7 +547,7 @@
                     </td>
                     <td>
                       <div class="flex gap-1.5 items-center flex-wrap">
-                        <span v-for="k in km.output" :key="k" class="keycap accent">{{ k.toUpperCase() }}</span>
+                        <span v-for="k in (km.output || [])" :key="k" class="keycap accent">{{ formatKeyLabel(k) }}</span>
                       </div>
                     </td>
                     <td>
@@ -553,7 +564,7 @@
                       </div>
                     </td>
                   </tr>
-                  <tr v-if="config.mouse.mappings.length === 0">
+                  <tr v-if="!config.mouse?.mappings || config.mouse.mappings.length === 0">
                     <td colspan="6" class="text-center py-10 text-muted text-xs">
                       暂无映射规则，可使用上方的“按键检测”或“常用预设”快速创建
                     </td>
@@ -1648,6 +1659,46 @@ const onHeaderDblClick = (e) => {
 const currentTab = ref('overview')
 const showPassword = ref(false)
 
+// Sidebar Resizing State & Methods
+const sidebarWidth = ref(Number(localStorage.getItem('bindx_sidebar_width')) || 215)
+const isResizingSidebar = ref(false)
+
+const startSidebarResize = (e) => {
+  if (e.button !== 0) return
+  e.preventDefault()
+  isResizingSidebar.value = true
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+
+  const onMouseMove = (moveEvent) => {
+    let newWidth = moveEvent.clientX
+    if (newWidth < 150) newWidth = 150
+    if (newWidth > 360) newWidth = 360
+    sidebarWidth.value = newWidth
+  }
+
+  const onMouseUp = () => {
+    isResizingSidebar.value = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', onMouseUp)
+    try {
+      localStorage.setItem('bindx_sidebar_width', sidebarWidth.value.toString())
+    } catch (err) {}
+  }
+
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+}
+
+const resetSidebarWidth = () => {
+  sidebarWidth.value = 215
+  try {
+    localStorage.setItem('bindx_sidebar_width', '215')
+  } catch (err) {}
+}
+
 const toast = ref({
   show: false,
   message: '',
@@ -1711,7 +1762,10 @@ const fetchConfig = async () => {
   try {
     const data = await invoke('get_config')
     if (data) {
+      if (!data.app) data.app = {}
       if (!data.app.theme) data.app.theme = 'light'
+      if (!data.mouse) data.mouse = { mappings: [], mouse_mappings: [] }
+      if (!data.mouse.mappings) data.mouse.mappings = []
       config.value = data
     }
   } catch (e) {
@@ -2101,6 +2155,140 @@ const deleteHotkey = (index) => {
 // Key Detector & Unified Remap State
 const isDetectingPadFocused = ref(false)
 const detectedKeys = ref([])
+
+// Key Helpers & Formatting
+const isMouseKey = (k) => {
+  if (!k || typeof k !== 'string') return false
+  const lower = k.toLowerCase().trim()
+  return ['x1', 'x2', 'mbutton', 'lbutton', 'rbutton'].includes(lower)
+}
+
+const formatKeyLabel = (k) => {
+  if (!k || typeof k !== 'string') return ''
+  const lower = k.toLowerCase().trim()
+  switch (lower) {
+    case 'x1': return '鼠标后退 (X1)'
+    case 'x2': return '鼠标前进 (X2)'
+    case 'mbutton': return '滚轮中键'
+    case 'lbutton': return '鼠标左键'
+    case 'rbutton': return '鼠标右键'
+    case 'ctrl': return 'Ctrl'
+    case 'alt': return 'Alt'
+    case 'shift': return 'Shift'
+    case 'win': return 'Win'
+    case 'space': return 'Space'
+    case 'esc': return 'Esc'
+    case 'backspace': return 'Backspace'
+    case 'delete': return 'Delete'
+    case 'enter': return 'Enter'
+    case 'tab': return 'Tab'
+    case 'up': return '↑'
+    case 'down': return '↓'
+    case 'left': return '←'
+    case 'right': return '→'
+    default: return k.toUpperCase()
+  }
+}
+
+const describeKeys = (keys) => {
+  if (!keys || !Array.isArray(keys) || keys.length === 0) return '未命名操作'
+  const labels = keys.map(k => formatKeyLabel(k))
+  return `${labels.join('+')} 操作`
+}
+
+const getDetectedKeyDescription = (keys) => {
+  if (!keys || !Array.isArray(keys) || keys.length === 0) return '无按键'
+  const hasMouse = keys.some(isMouseKey)
+  const hasModifier = keys.some(k => ['ctrl', 'alt', 'shift', 'win'].includes((k || '').toLowerCase()))
+  if (hasMouse && hasModifier) return '鼠标与快捷键组合'
+  if (hasMouse) return '鼠标按键'
+  if (hasModifier && keys.length > 1) return '键盘组合快捷键'
+  return '单键触发'
+}
+
+const clearDetectedKeys = () => {
+  detectedKeys.value = []
+}
+
+const createMappingFromDetected = () => {
+  if (!detectedKeys.value || detectedKeys.value.length === 0) return
+  openAddRemapModal({
+    trigger: [...detectedKeys.value],
+    output: ['ctrl', 'w'],
+    description: describeKeys(detectedKeys.value),
+    enabled: true
+  })
+}
+
+const onDetectorFocus = async () => {
+  isDetectingPadFocused.value = true
+  try {
+    await invoke('set_recording_state', { active: true })
+  } catch (e) {}
+}
+
+const onDetectorBlur = async () => {
+  isDetectingPadFocused.value = false
+  try {
+    await invoke('set_recording_state', { active: false })
+  } catch (e) {}
+}
+
+const onDetectorKeyDown = (e) => {
+  e.preventDefault()
+  e.stopPropagation()
+
+  const modifiers = []
+  if (e.ctrlKey) modifiers.push('ctrl')
+  if (e.altKey) modifiers.push('alt')
+  if (e.shiftKey) modifiers.push('shift')
+  if (e.metaKey) modifiers.push('win')
+
+  let key = e.key.toLowerCase()
+  if (['control', 'alt', 'shift', 'meta'].includes(key)) {
+    detectedKeys.value = [...modifiers]
+    return
+  }
+
+  if (key === ' ') key = 'space'
+  else if (key === 'escape') key = 'esc'
+  else if (key === 'arrowup') key = 'up'
+  else if (key === 'arrowdown') key = 'down'
+  else if (key === 'arrowleft') key = 'left'
+  else if (key === 'arrowright') key = 'right'
+
+  const all = [...modifiers]
+  if (!all.includes(key)) {
+    all.push(key)
+  }
+  detectedKeys.value = all
+}
+
+const onDetectorPointerDown = (e) => {
+  if (e.button === 3 || e.button === 4 || e.button === 1) {
+    e.preventDefault()
+    e.stopPropagation()
+  } else {
+    return
+  }
+
+  let mouseKey = ''
+  if (e.button === 3) mouseKey = 'x1'
+  else if (e.button === 4) mouseKey = 'x2'
+  else if (e.button === 1) mouseKey = 'mbutton'
+
+  const modifiers = []
+  if (e.ctrlKey) modifiers.push('ctrl')
+  if (e.altKey) modifiers.push('alt')
+  if (e.shiftKey) modifiers.push('shift')
+  if (e.metaKey) modifiers.push('win')
+
+  const all = [...modifiers]
+  if (!all.includes(mouseKey)) {
+    all.push(mouseKey)
+  }
+  detectedKeys.value = all
+}
 
 const remapModal = ref({
   show: false,
@@ -2739,7 +2927,8 @@ onMounted(() => {
 }
 
 .sidebar {
-  width: 215px;
+  min-width: 150px;
+  max-width: 360px;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-color);
   display: flex;
@@ -2748,6 +2937,46 @@ onMounted(() => {
   flex-shrink: 0;
   gap: 4px;
   transition: background 0.25s ease, border-color 0.25s ease;
+  overflow-x: hidden;
+  overflow-y: auto;
+  position: relative;
+  user-select: none;
+}
+
+/* Draggable Splitter Handle */
+.sidebar-resizer {
+  width: 10px;
+  margin-left: -5px;
+  margin-right: -5px;
+  z-index: 25;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  user-select: none;
+  touch-action: none;
+}
+
+.resizer-line {
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  border-radius: 1px;
+  transition: background 0.15s ease, width 0.15s ease;
+}
+
+.sidebar-resizer:hover .resizer-line,
+.sidebar-resizer.resizing .resizer-line {
+  background: #6366f1;
+  width: 3px;
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+}
+
+[data-theme="slate"] .sidebar-resizer:hover .resizer-line,
+[data-theme="slate"] .sidebar-resizer.resizing .resizer-line {
+  background: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
 }
 
 .nav-tab {
@@ -2755,7 +2984,7 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 11px 16px;
+  padding: 11px 14px;
   border-radius: 10px;
   font-size: 13.5px;
   font-weight: 500;
@@ -2765,6 +2994,13 @@ onMounted(() => {
   cursor: pointer;
   transition: all 0.16s ease;
   position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tab-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .nav-tab:hover {
   background: var(--bg-card-subtle);
