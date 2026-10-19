@@ -13,7 +13,7 @@
         </div>
         <div class="brand-text" data-tauri-drag-region>
           <span class="title" data-tauri-drag-region>BindX</span>
-          <span class="version-tag" data-tauri-drag-region>Native</span>
+          <span class="version-tag" data-tauri-drag-region>v2.0</span>
         </div>
       </div>
 
@@ -34,7 +34,7 @@
         <!-- Mouse Remap Pill -->
         <div class="status-pill" :class="{ active: config.app.mouse_running }">
           <span class="dot"></span>
-          <span>鼠标重映射: {{ config.app.mouse_running ? '运行中' : '已停止' }}</span>
+          <span>侧键映射: {{ config.app.mouse_running ? '运行中' : '已停止' }}</span>
           <label class="toggle-switch mini">
             <input type="checkbox" v-model="config.app.mouse_running" @change="onToggleMouseEngine" />
             <span class="slider"></span>
@@ -54,7 +54,7 @@
       <div class="header-actions">
         <button 
           class="theme-toggle-btn" 
-          :title="config.app?.theme === 'slate' ? '切换为清爽浅色模式' : '切换为柔和灰蓝模式'"
+          title="切换外观主题"
           @click="toggleTheme"
         >
           <Sun v-if="(config.app?.theme || 'light') === 'light'" class="w-3.5 h-3.5 text-amber-500" />
@@ -98,10 +98,10 @@
               <Cloud class="w-4 h-4 indicator-icon" />
             </div>
             <div class="indicator-info">
-              <span class="label">WebDAV 云同步</span>
+              <span class="label">云同步</span>
               <div class="val-row">
                 <span class="indicator-dot" :class="config.webdav.server_url ? 'online' : 'offline'"></span>
-                <span class="val">{{ config.webdav.server_url ? '已配置连接' : '未连接服务' }}</span>
+                <span class="val">{{ config.webdav.server_url ? '已连接' : '未配置' }}</span>
               </div>
             </div>
           </div>
@@ -120,16 +120,16 @@
           </div>
         </transition>
 
-        <!-- 1. 仪表盘 (Overview) -->
+        <!-- 1. 概览 (Overview) -->
         <div v-if="currentTab === 'overview'" class="tab-pane">
           <div class="pane-header">
             <div>
-              <h2>系统运行概览</h2>
-              <p class="subtitle">统一监视和管理 Windows 快捷键响应与底层输入硬件事件</p>
+              <h2>概览</h2>
+              <p class="subtitle">监视快捷键与输入映射的运行状态</p>
             </div>
             <div class="actions">
-              <button class="btn btn-secondary" @click="fetchConfig">刷新状态</button>
-              <button class="btn btn-primary" @click="saveAll">保存所有修改</button>
+              <button class="btn btn-secondary" @click="fetchConfig">刷新</button>
+              <button class="btn btn-primary" @click="saveAll">保存设置</button>
             </div>
           </div>
 
@@ -140,10 +140,10 @@
                 <Keyboard class="w-5 h-5 text-indigo-500" />
               </div>
               <div class="kpi-info">
-                <span class="kpi-label">已配置快捷键</span>
+                <span class="kpi-label">全局快捷键</span>
                 <div class="kpi-value-row">
                   <span class="kpi-value">{{ config.hotkeys.entries.length }}</span>
-                  <span class="kpi-unit">个规则 (已启用 {{ activeHotkeysCount }})</span>
+                  <span class="kpi-unit">项 (已启用 {{ activeHotkeysCount }})</span>
                 </div>
               </div>
             </div>
@@ -153,10 +153,10 @@
                 <MousePointer class="w-5 h-5 text-pink-500" />
               </div>
               <div class="kpi-info">
-                <span class="kpi-label">输入重映射规则</span>
+                <span class="kpi-label">按键与侧键映射</span>
                 <div class="kpi-value-row">
                   <span class="kpi-value">{{ config.mouse.mouse_mappings.length + config.mouse.mappings.length }}</span>
-                  <span class="kpi-unit">个规则 (侧键 + 按键宏)</span>
+                  <span class="kpi-unit">项</span>
                 </div>
               </div>
             </div>
@@ -166,10 +166,10 @@
                 <Cloud class="w-5 h-5 text-cyan-500" />
               </div>
               <div class="kpi-info">
-                <span class="kpi-label">WebDAV 云漫游</span>
+                <span class="kpi-label">云端同步</span>
                 <div class="kpi-value-row">
                   <span class="kpi-status-dot" :class="config.webdav.server_url ? 'online' : 'offline'"></span>
-                  <span class="kpi-text-val">{{ config.webdav.server_url ? '自建服务已连接' : '未配置服务' }}</span>
+                  <span class="kpi-text-val">{{ config.webdav.server_url ? '已连接' : '未配置' }}</span>
                 </div>
               </div>
             </div>
@@ -177,7 +177,7 @@
 
           <!-- Hero Engine Cards -->
           <div class="grid-cards mt-5">
-            <!-- App Hotkey Engine Card -->
+            <!-- Hotkey Engine Card -->
             <div class="glass-panel glass-panel-hover engine-card">
               <div class="card-header">
                 <div class="card-icon-title">
@@ -185,8 +185,8 @@
                     <Keyboard class="w-5 h-5 text-white" />
                   </div>
                   <div>
-                    <h3>应用呼出与切换引擎</h3>
-                    <p>原生 Win32 RegisterHotKey 低功耗系统消息泵</p>
+                    <h3>快捷键服务</h3>
+                    <p>全局快捷键监听与窗口激活</p>
                   </div>
                 </div>
                 <label class="toggle-switch">
@@ -197,20 +197,20 @@
 
               <div class="card-body">
                 <div class="stat-row">
-                  <span class="stat-name">激活规则总数</span>
-                  <span class="stat-value">{{ activeHotkeysCount }} / {{ config.hotkeys.entries.length }} 项有效运行</span>
+                  <span class="stat-name">已启用</span>
+                  <span class="stat-value">{{ activeHotkeysCount }} / {{ config.hotkeys.entries.length }} 项</span>
                 </div>
                 <div class="stat-row">
-                  <span class="stat-name">引擎调度状态</span>
+                  <span class="stat-name">状态</span>
                   <span class="status-tag" :class="config.app.hotkey_running ? 'online' : 'offline'">
-                    {{ config.app.hotkey_running ? '正在捕获全局快捷键' : '已暂停服务' }}
+                    {{ config.app.hotkey_running ? '运行中' : '已暂停' }}
                   </span>
                 </div>
               </div>
 
               <div class="card-footer">
                 <button class="btn btn-secondary w-full" @click="currentTab = 'hotkeys'">
-                  <span>管理快捷键规则列表</span>
+                  <span>管理快捷键</span>
                   <ArrowRight class="w-4 h-4 ml-1" />
                 </button>
               </div>
@@ -224,8 +224,8 @@
                     <MousePointer class="w-5 h-5 text-white" />
                   </div>
                   <div>
-                    <h3>底层硬件与鼠标重映射</h3>
-                    <p>WH_MOUSE_LL / WH_KEYBOARD_LL 高精度底层钩子分派</p>
+                    <h3>输入映射</h3>
+                    <p>鼠标侧键与键盘组合键分派</p>
                   </div>
                 </div>
                 <label class="toggle-switch">
@@ -236,18 +236,18 @@
 
               <div class="card-body">
                 <div class="stat-row">
-                  <span class="stat-name">鼠标侧键 (X1/X2)</span>
-                  <span class="stat-value">{{ config.mouse.mouse_mappings.length }} 项已配置</span>
+                  <span class="stat-name">鼠标侧键</span>
+                  <span class="stat-value">{{ config.mouse.mouse_mappings.length }} 项</span>
                 </div>
                 <div class="stat-row">
-                  <span class="stat-name">键盘宏映射规则</span>
-                  <span class="stat-value">{{ config.mouse.mappings.length }} 项已配置</span>
+                  <span class="stat-name">组合键映射</span>
+                  <span class="stat-value">{{ config.mouse.mappings.length }} 项</span>
                 </div>
               </div>
 
               <div class="card-footer">
                 <button class="btn btn-secondary w-full" @click="currentTab = 'remap'">
-                  <span>配置重映射与按键宏</span>
+                  <span>管理映射</span>
                   <ArrowRight class="w-4 h-4 ml-1" />
                 </button>
               </div>
@@ -263,17 +263,17 @@
                   <Cloud class="w-5 h-5 text-cyan-500" />
                 </div>
                 <div>
-                  <h4 class="integration-title">WebDAV 云端配置漫游</h4>
-                  <p class="integration-desc">跨设备安全同步 JSON 配置，自动维护远程目录</p>
+                  <h4 class="integration-title">云端配置同步</h4>
+                  <p class="integration-desc">多设备共享快捷键配置</p>
                 </div>
               </div>
               <div class="integration-meta">
                 <div class="meta-item">
-                  <span class="meta-label">服务器地址</span>
-                  <span class="meta-val font-mono">{{ config.webdav.server_url || '尚未配置' }}</span>
+                  <span class="meta-label">服务器</span>
+                  <span class="meta-val font-mono">{{ config.webdav.server_url || '未配置' }}</span>
                 </div>
                 <div class="meta-item">
-                  <span class="meta-label">云端目录</span>
+                  <span class="meta-label">远程路径</span>
                   <span class="meta-val font-mono">{{ config.webdav.remote_filename || '未设置' }}</span>
                 </div>
               </div>
@@ -282,7 +282,7 @@
                   <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': downloadingWebDav }" />
                   <span>立即同步</span>
                 </button>
-                <button class="btn btn-secondary" @click="currentTab = 'webdav'">进入同步中心</button>
+                <button class="btn btn-secondary" @click="currentTab = 'webdav'">同步设置</button>
               </div>
             </div>
 
@@ -293,37 +293,37 @@
                   <ShieldCheck class="w-5 h-5 text-indigo-500" />
                 </div>
                 <div>
-                  <h4 class="integration-title">BindX 纯原生分发架构</h4>
-                  <p class="integration-desc">Windows x64 原生单文件 EXE，零外部运行环境依赖</p>
+                  <h4 class="integration-title">运行环境</h4>
+                  <p class="integration-desc">绿色单文件免安装架构</p>
                 </div>
               </div>
               <div class="integration-meta">
                 <div class="meta-item">
-                  <span class="meta-label">当前运行版本</span>
-                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.0 Native</span>
+                  <span class="meta-label">当前版本</span>
+                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.0</span>
                 </div>
                 <div class="meta-item">
-                  <span class="meta-label">Windows 开机自启</span>
-                  <span class="meta-val">{{ config.app.autostart_enabled ? '已开启自动驻留' : '未开启' }}</span>
+                  <span class="meta-label">开机自启</span>
+                  <span class="meta-val">{{ config.app.autostart_enabled ? '已开启' : '未开启' }}</span>
                 </div>
               </div>
               <div class="integration-actions">
-                <button class="btn btn-secondary" @click="onCheckUpdate">检查在线更新</button>
-                <button class="btn btn-secondary" @click="currentTab = 'settings'">偏好设置</button>
+                <button class="btn btn-secondary" @click="onCheckUpdate">检查更新</button>
+                <button class="btn btn-secondary" @click="currentTab = 'settings'">设置</button>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 2. 应用快捷键 (App Hotkeys) -->
+        <!-- 2. 快捷键 (Hotkeys) -->
         <div v-if="currentTab === 'hotkeys'" class="tab-pane">
           <div class="pane-header">
             <div>
-              <h2>应用全局快捷键</h2>
-              <p class="subtitle">按下对应按键组合，立即呼出、最小化或激活目标软件窗口或浏览器页面</p>
+              <h2>快捷键</h2>
+              <p class="subtitle">绑定全局快捷键以呼出或切换指定应用与网页</p>
             </div>
             <div class="actions">
-              <button class="btn btn-primary" @click="openAddHotkeyModal">+ 添加快捷键规则</button>
+              <button class="btn btn-primary" @click="openAddHotkeyModal">+ 添加快捷键</button>
             </div>
           </div>
 
@@ -332,10 +332,10 @@
               <thead>
                 <tr>
                   <th style="width: 70px;">状态</th>
-                  <th>触发快捷键</th>
-                  <th>目标应用 / 标识</th>
+                  <th>快捷键</th>
+                  <th>目标应用</th>
                   <th>类型</th>
-                  <th>激活行为</th>
+                  <th>行为</th>
                   <th style="width: 110px;">操作</th>
                 </tr>
               </thead>
@@ -384,15 +384,15 @@
           </div>
         </div>
 
-        <!-- 3. 鼠标与按键重映射 (Remap) -->
+        <!-- 3. 按键映射 (Remap) -->
         <div v-if="currentTab === 'remap'" class="tab-pane">
           <div class="pane-header">
             <div>
-              <h2>按键与鼠标重映射</h2>
-              <p class="subtitle">将鼠标硬件侧键（前进/后退）或键盘组合键映射为高频快捷键或按键宏</p>
+              <h2>按键映射</h2>
+              <p class="subtitle">配置鼠标侧键与键盘组合键的操作映射</p>
             </div>
             <div class="actions">
-              <button class="btn btn-primary" @click="saveAll">保存所有重映射</button>
+              <button class="btn btn-primary" @click="saveAll">保存设置</button>
             </div>
           </div>
 
@@ -404,13 +404,13 @@
                   <MousePointer class="w-5 h-5 text-pink-500" />
                 </div>
                 <div>
-                  <h3 class="section-title">鼠标硬件侧键映射 (X1 / X2)</h3>
-                  <p class="section-desc">基于 Win32 WH_MOUSE_LL 底层钩子精准捕获侧键点击，静默转换为键盘组合</p>
+                  <h3 class="section-title">鼠标侧键</h3>
+                  <p class="section-desc">将鼠标侧键映射为指定快捷键操作</p>
                 </div>
               </div>
               <div class="engine-badge-pill" :class="{ active: config.app.mouse_running }">
                 <span class="dot"></span>
-                <span>鼠标引擎: {{ config.app.mouse_running ? '正常运行' : '已暂停' }}</span>
+                <span>侧键监听: {{ config.app.mouse_running ? '运行中' : '已暂停' }}</span>
               </div>
             </div>
 
@@ -424,8 +424,8 @@
                   <div class="mouse-badge-group">
                     <span class="keycap mouse-keycap">{{ m.button.toUpperCase() }}</span>
                     <div>
-                      <span class="mouse-btn-name">{{ m.button.toUpperCase() === 'X1' ? '后退侧键 (XButton 1)' : '前进侧键 (XButton 2)' }}</span>
-                      <span class="mouse-btn-desc">{{ m.description || (m.button.toUpperCase() === 'X1' ? '默认关闭标签页 (Ctrl+W)' : '前进行为') }}</span>
+                      <span class="mouse-btn-name">{{ m.button.toUpperCase() === 'X1' ? '后退键' : '前进键' }}</span>
+                      <span class="mouse-btn-desc">{{ m.description || (m.button.toUpperCase() === 'X1' ? '关闭标签页' : '前进') }}</span>
                     </div>
                   </div>
                   <label class="toggle-switch">
@@ -436,14 +436,14 @@
 
                 <div class="mouse-mapping-flow">
                   <div class="flow-step">
-                    <span class="flow-label">触发硬件</span>
-                    <span class="keycap">{{ m.button.toUpperCase() }} 侧键</span>
+                    <span class="flow-label">触发键</span>
+                    <span class="keycap">{{ m.button.toUpperCase() }}</span>
                   </div>
                   <div class="flow-arrow">
                     <ArrowRight class="w-4 h-4 text-slate-400" />
                   </div>
                   <div class="flow-step">
-                    <span class="flow-label">映射输出</span>
+                    <span class="flow-label">输出键</span>
                     <div class="flex gap-1.5 flex-wrap">
                       <span v-for="k in m.output" :key="k" class="keycap accent">{{ k.toUpperCase() }}</span>
                     </div>
@@ -454,7 +454,7 @@
                   <input 
                     type="text" 
                     class="input-field mouse-input" 
-                    placeholder="输入按键组合, 如 ctrl w 或 alt left"
+                    placeholder="例如 ctrl w"
                     :value="m.output.join(' ')"
                     @change="e => updateMouseOutput(m, e.target.value)"
                   />
@@ -462,11 +462,11 @@
 
                 <!-- Quick Presets -->
                 <div class="quick-presets">
-                  <span class="preset-hint">快速应用：</span>
-                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['ctrl', 'w'])">Ctrl+W (关闭标签)</button>
-                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['ctrl', 't'])">Ctrl+T (新建标签)</button>
-                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['alt', 'left'])">Alt+Left (后退)</button>
-                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['win', 'd'])">Win+D (桌面)</button>
+                  <span class="preset-hint">常用预设：</span>
+                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['ctrl', 'w'])">关闭标签 (Ctrl+W)</button>
+                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['ctrl', 't'])">新建标签 (Ctrl+T)</button>
+                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['alt', 'left'])">后退 (Alt+Left)</button>
+                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['win', 'd'])">显示桌面 (Win+D)</button>
                 </div>
               </div>
             </div>
@@ -480,11 +480,11 @@
                   <Keyboard class="w-5 h-5 text-indigo-500" />
                 </div>
                 <div>
-                  <h3 class="section-title">键盘按键宏组合重映射</h3>
-                  <p class="section-desc">将任意键盘组合拦截并转换分发为另一组目标按键，突破常规软件限制</p>
+                  <h3 class="section-title">组合键映射</h3>
+                  <p class="section-desc">将特定键盘组合键映射为目标按键输出</p>
                 </div>
               </div>
-              <button class="btn btn-secondary text-xs" @click="addKeyMapping">+ 添加按键重映射</button>
+              <button class="btn btn-secondary text-xs" @click="addKeyMapping">+ 添加映射</button>
             </div>
 
             <div class="overflow-hidden rounded-xl border border-color">
@@ -492,10 +492,10 @@
                 <thead>
                   <tr>
                     <th style="width: 80px;">状态</th>
-                    <th>触发原始组合</th>
+                    <th>触发键</th>
                     <th style="width: 40px; text-align: center;"></th>
-                    <th>映射输出目标</th>
-                    <th>规则描述</th>
+                    <th>输出键</th>
+                    <th>描述</th>
                     <th style="width: 90px; text-align: center;">操作</th>
                   </tr>
                 </thead>
@@ -524,14 +524,14 @@
                       <span class="text-xs text-secondary font-medium">{{ km.description }}</span>
                     </td>
                     <td style="text-align: center;">
-                      <button class="btn-icon danger mx-auto" title="删除重映射规则" @click="deleteKeyMapping(idx)">
+                      <button class="btn-icon danger mx-auto" title="删除映射" @click="deleteKeyMapping(idx)">
                         <Trash2 class="w-3.5 h-3.5" />
                       </button>
                     </td>
                   </tr>
                   <tr v-if="config.mouse.mappings.length === 0">
                     <td colspan="6" class="text-center py-8 text-muted text-xs">
-                      暂无按键宏重映射规则，点击右上角 “+ 添加按键重映射” 即可创建
+                      暂无组合键映射，点击右上角添加
                     </td>
                   </tr>
                 </tbody>
@@ -540,12 +540,12 @@
           </div>
         </div>
 
-        <!-- 4. WebDAV 云端同步 (Cloud Sync) -->
+        <!-- 4. 云同步 (Cloud Sync) -->
         <div v-if="currentTab === 'webdav'" class="tab-pane">
           <div class="pane-header">
             <div>
-              <h2>WebDAV 云端同步工作台</h2>
-              <p class="subtitle">支持坚果云 (Nutstore)、Nextcloud、Alist、自建服务器等标准 WebDAV 协议</p>
+              <h2>云同步</h2>
+              <p class="subtitle">通过 WebDAV 在多台设备间同步配置文件</p>
             </div>
             <div class="actions">
               <button class="btn btn-secondary" :disabled="testingWebDav" @click="onTestWebDav">
@@ -554,7 +554,7 @@
               </button>
               <button class="btn btn-primary" :disabled="downloadingWebDav" @click="onDownloadWebDav">
                 <DownloadCloud class="w-3.5 h-3.5" :class="{ 'animate-spin': downloadingWebDav }" />
-                <span>{{ downloadingWebDav ? '同步中...' : '从云端同步下载' }}</span>
+                <span>{{ downloadingWebDav ? '同步中...' : '从云端拉取' }}</span>
               </button>
             </div>
           </div>
@@ -568,39 +568,39 @@
                     <Server class="w-5 h-5 text-indigo-500" />
                   </div>
                   <div>
-                    <h3 class="card-title">WebDAV 服务器连接凭据</h3>
-                    <p class="card-subtitle">安全保存云端访问地址与鉴权凭据，配置自动加密本地缓存</p>
+                    <h3 class="card-title">服务器设置</h3>
+                    <p class="card-subtitle">配置 WebDAV 连接地址与登录凭据</p>
                   </div>
                 </div>
               </div>
 
               <!-- Fast presets chips -->
               <div class="preset-section">
-                <span class="preset-label">快速导入常用服务商配置：</span>
+                <span class="preset-label">快速选择：</span>
                 <div class="preset-chips">
                   <button type="button" class="preset-chip active" @click="applyWebDavPreset('custom_server')">
-                    <span class="preset-star">★</span> 我的自建服务 (175.178.147.236)
+                    <span class="preset-star">★</span> 自建服务 (175.178.147.236)
                   </button>
-                  <button type="button" class="preset-chip" @click="applyWebDavPreset('jianguoyun')">坚果云 (Nutstore)</button>
-                  <button type="button" class="preset-chip" @click="applyWebDavPreset('alist')">Alist 挂载盘</button>
+                  <button type="button" class="preset-chip" @click="applyWebDavPreset('jianguoyun')">坚果云</button>
+                  <button type="button" class="preset-chip" @click="applyWebDavPreset('alist')">Alist</button>
                   <button type="button" class="preset-chip" @click="applyWebDavPreset('nextcloud')">Nextcloud</button>
                 </div>
               </div>
 
               <div class="form-grid">
                 <div class="form-item col-span-2">
-                  <label class="form-label">WebDAV 服务器根 URL</label>
+                  <label class="form-label">服务器地址</label>
                   <input 
                     type="text" 
                     class="input-field" 
                     placeholder="http://175.178.147.236:7779/"
                     v-model="config.webdav.server_url" 
                   />
-                  <span class="field-hint">根地址示例: http://175.178.147.236:7779/ 或 https://dav.jianguoyun.com/dav/</span>
+                  <span class="field-hint">支持 http / https 协议</span>
                 </div>
 
                 <div class="form-item">
-                  <label class="form-label">账户用户名 / 邮箱</label>
+                  <label class="form-label">用户名</label>
                   <input 
                     type="text" 
                     class="input-field" 
@@ -610,7 +610,7 @@
                 </div>
 
                 <div class="form-item">
-                  <label class="form-label">密码 / 应用专属授权码</label>
+                  <label class="form-label">密码</label>
                   <div class="password-input-wrapper">
                     <input 
                       :type="showPassword ? 'text' : 'password'" 
@@ -631,20 +631,20 @@
                 </div>
 
                 <div class="form-item col-span-2">
-                  <label class="form-label">云端存储路径（自动维护子目录）</label>
+                  <label class="form-label">远程路径</label>
                   <input 
                     type="text" 
                     class="input-field font-mono" 
                     placeholder="bindx/bindx_config.json"
                     v-model="config.webdav.remote_filename" 
                   />
-                  <span class="field-hint">输入 <code>bindx/bindx_config.json</code>，BindX 会在 WebDAV 根目录自动创建 <code>/bindx/</code> 文件夹并存入配置</span>
+                  <span class="field-hint">建议填入 <code>bindx/bindx_config.json</code>，自动创建独立文件夹</span>
                 </div>
 
                 <div class="form-item col-span-2 flex items-center justify-between pt-2">
                   <div>
-                    <span class="font-medium text-sm text-main">启动时自动同步云端配置</span>
-                    <p class="text-xs text-muted">软件开机静默启动后，自动拉取最新的云端配置并热更新生效</p>
+                    <span class="font-medium text-sm text-main">开机时自动同步</span>
+                    <p class="text-xs text-muted">启动后自动拉取并应用云端配置</p>
                   </div>
                   <label class="toggle-switch">
                     <input type="checkbox" v-model="config.webdav.auto_sync_on_startup" />
@@ -654,7 +654,7 @@
               </div>
 
               <div class="card-footer-actions">
-                <button class="btn btn-primary" @click="saveAll">保存 WebDAV 凭据</button>
+                <button class="btn btn-primary" @click="saveAll">保存设置</button>
               </div>
             </div>
 
@@ -666,8 +666,8 @@
                     <Cloud class="w-5 h-5 text-cyan-500" />
                   </div>
                   <div>
-                    <h3 class="card-title">配置同步操作面板</h3>
-                    <p class="card-subtitle">双向同步本地与云端 WebDAV 配置文件</p>
+                    <h3 class="card-title">同步操作</h3>
+                    <p class="card-subtitle">手动上传或从云端拉取配置</p>
                   </div>
                 </div>
               </div>
@@ -675,19 +675,19 @@
               <!-- Live Sync Status Banner -->
               <div class="sync-status-box">
                 <div class="sync-status-row">
-                  <span class="sync-label">服务器就绪状态:</span>
+                  <span class="sync-label">连接状态:</span>
                   <span class="status-tag" :class="config.webdav.server_url ? 'online' : 'offline'">
-                    {{ config.webdav.server_url ? '已就绪' : '未配置服务' }}
+                    {{ config.webdav.server_url ? '已连接' : '未配置' }}
                   </span>
                 </div>
                 <div class="sync-status-row">
-                  <span class="sync-label">云端目录位置:</span>
+                  <span class="sync-label">远程目录:</span>
                   <span class="font-mono text-xs text-main">/bindx/</span>
                 </div>
                 <div class="sync-status-row">
-                  <span class="sync-label">完整远程路径:</span>
+                  <span class="sync-label">完整路径:</span>
                   <span class="font-mono text-xs text-muted truncate" :title="resolvedWebDavUrl">
-                    {{ resolvedWebDavUrl || '尚未配置' }}
+                    {{ resolvedWebDavUrl || '未配置' }}
                   </span>
                 </div>
               </div>
@@ -696,8 +696,8 @@
               <div class="sync-actions-list">
                 <div class="sync-action-item">
                   <div class="sync-action-desc">
-                    <span class="sync-action-title">测试连接性</span>
-                    <span class="sync-action-sub">测试 WebDAV 根地址连通性与账号凭据</span>
+                    <span class="sync-action-title">测试连接</span>
+                    <span class="sync-action-sub">检测服务器与凭据有效性</span>
                   </div>
                   <button class="btn btn-secondary" :disabled="testingWebDav" @click="onTestWebDav">
                     <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': testingWebDav }" />
@@ -707,8 +707,8 @@
 
                 <div class="sync-action-item">
                   <div class="sync-action-desc">
-                    <span class="sync-action-title">上传备份至云端</span>
-                    <span class="sync-action-sub">将当前本地配置保存至 WebDAV /bindx/ 目录</span>
+                    <span class="sync-action-title">上传配置</span>
+                    <span class="sync-action-sub">将当前本地配置推送到云端</span>
                   </div>
                   <button class="btn btn-secondary" :disabled="uploadingWebDav" @click="onUploadWebDav">
                     <Upload class="w-3.5 h-3.5" :class="{ 'animate-spin': uploadingWebDav }" />
@@ -718,8 +718,8 @@
 
                 <div class="sync-action-item highlight">
                   <div class="sync-action-desc">
-                    <span class="sync-action-title">从云端同步下载</span>
-                    <span class="sync-action-sub">拉取远端配置并立即热重载当前按键规则</span>
+                    <span class="sync-action-title">下载配置</span>
+                    <span class="sync-action-sub">拉取云端配置并立即生效</span>
                   </div>
                   <button class="btn btn-primary" :disabled="downloadingWebDav" @click="onDownloadWebDav">
                     <DownloadCloud class="w-3.5 h-3.5" :class="{ 'animate-spin': downloadingWebDav }" />
@@ -730,26 +730,26 @@
 
               <!-- Informative hint box -->
               <div class="distribution-tip mt-auto">
-                <div class="font-medium text-main text-xs mb-1">WebDAV 漫游优势：</div>
+                <div class="font-medium text-main text-xs mb-1">说明：</div>
                 <p class="text-xs text-muted leading-relaxed">
-                  通过私有 WebDAV 服务器，您可以在多台办公室或家用电脑之间无缝漫游快捷键配置。无需第三方公网注册，数据完全私有掌控。
+                  配置保存在 WebDAV 服务器中，实现多设备配置无缝共享。
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 5. 软件版本与下载 (Updates) -->
+        <!-- 5. 版本更新 (Updates) -->
         <div v-if="currentTab === 'update'" class="tab-pane">
           <div class="pane-header">
             <div>
-              <h2>软件版本与下载中心</h2>
-              <p class="subtitle">客户端纯净下载机制，告别繁重复杂的 Git 本地源码上传与版本冲突</p>
+              <h2>版本更新</h2>
+              <p class="subtitle">检查与下载最新版本</p>
             </div>
             <div class="actions">
               <button class="btn btn-primary" :disabled="checkingUpdate" @click="onCheckUpdate">
                 <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': checkingUpdate }" />
-                <span>{{ checkingUpdate ? '正在检查...' : '检查最新版本' }}</span>
+                <span>{{ checkingUpdate ? '检查中...' : '检查更新' }}</span>
               </button>
             </div>
           </div>
@@ -763,13 +763,13 @@
                     <Sparkles class="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h3 class="hero-title">BindX Native Edition</h3>
-                    <p class="hero-ver">当前运行版本: <span class="font-mono font-semibold text-indigo-600">v2.0.0 Native</span></p>
+                    <h3 class="hero-title">BindX</h3>
+                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v2.0.0</span></p>
                   </div>
                 </div>
                 <div>
                   <span v-if="updateInfo && updateInfo.has_update" class="update-badge has-update">发现新版本</span>
-                  <span v-else class="update-badge latest">已是最新版</span>
+                  <span v-else class="update-badge latest">最新版本</span>
                 </div>
               </div>
 
@@ -777,19 +777,19 @@
               <div class="hero-specs-list">
                 <div class="spec-row">
                   <span class="spec-name">运行架构</span>
-                  <span class="spec-val">Windows x64 Native (Rust + Tauri)</span>
+                  <span class="spec-val">Windows x64</span>
                 </div>
                 <div class="spec-row">
-                  <span class="spec-name">分发规格</span>
-                  <span class="spec-val">单一独立免安装 EXE (零外部依赖)</span>
+                  <span class="spec-name">运行规格</span>
+                  <span class="spec-val">独立绿色单文件</span>
                 </div>
                 <div class="spec-row">
-                  <span class="spec-name">运行时内存</span>
-                  <span class="spec-val">~15MB 超轻量系统资源占用</span>
+                  <span class="spec-name">内存占用</span>
+                  <span class="spec-val">约 15 MB</span>
                 </div>
                 <div class="spec-row">
-                  <span class="spec-name">底层消息捕获</span>
-                  <span class="spec-val">Win32 RegisterHotKey + LL-Hook</span>
+                  <span class="spec-name">系统调用</span>
+                  <span class="spec-val">原生系统钩子</span>
                 </div>
               </div>
 
@@ -797,23 +797,23 @@
               <div v-if="updateInfo && updateInfo.has_update" class="update-card-content">
                 <div class="flex items-baseline justify-between mb-2">
                   <h4 class="text-base font-semibold text-indigo-600">
-                    最新版本: {{ updateInfo.latest_version }} ({{ updateInfo.release_name }})
+                    最新版本: {{ updateInfo.latest_version }}
                   </h4>
                   <span class="text-xs text-muted">{{ updateInfo.published_at }}</span>
                 </div>
 
                 <div class="changelog-box">
                   <div class="text-xs font-semibold text-secondary uppercase tracking-wider mb-1">更新日志：</div>
-                  <pre class="changelog-text">{{ updateInfo.release_notes || '无详细更新说明' }}</pre>
+                  <pre class="changelog-text">{{ updateInfo.release_notes || '无更新说明' }}</pre>
                 </div>
 
                 <div class="flex gap-3 mt-4">
                   <button class="btn btn-success" @click="openUrl(updateInfo.download_url)">
                     <DownloadCloud class="w-4 h-4" />
-                    立即下载最新程序
+                    立即下载
                   </button>
                   <button class="btn btn-secondary" @click="openUrl(updateInfo.release_page_url)">
-                    查看 Release 页面
+                    发布页面
                   </button>
                 </div>
               </div>
@@ -822,16 +822,16 @@
               <div v-else class="py-4 text-center text-muted text-sm flex flex-col items-center gap-2">
                 <div class="flex items-center gap-2 text-emerald-600 font-medium">
                   <CheckCircle2 class="w-4 h-4" />
-                  <span>当前版本已是最新，无需更新！</span>
+                  <span>当前已是最新版本</span>
                 </div>
-                <p class="text-xs text-dim">点击右上角按钮可重新查询远程分发通道的更新日志与发布版本。</p>
+                <p class="text-xs text-dim">点击下方按钮可重新查询云端发布。</p>
               </div>
 
               <!-- Direct Check Button -->
               <div class="pt-2">
                 <button class="btn btn-secondary w-full" :disabled="checkingUpdate" @click="onCheckUpdate">
                   <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': checkingUpdate }" />
-                  <span>{{ checkingUpdate ? '正在连接远程分发服务...' : '重新检查更新' }}</span>
+                  <span>{{ checkingUpdate ? '正在检查...' : '重新检查' }}</span>
                 </button>
               </div>
             </div>
@@ -844,8 +844,8 @@
                     <ShieldCheck class="w-5 h-5 text-indigo-500" />
                   </div>
                   <div>
-                    <h3 class="card-title">新一代软件分发与架构演进</h3>
-                    <p class="card-subtitle">彻底重塑轻量客户端的分发体验</p>
+                    <h3 class="card-title">分发架构</h3>
+                    <p class="card-subtitle">纯净高效的客户端机制</p>
                   </div>
                 </div>
               </div>
@@ -854,32 +854,32 @@
                 <div class="arch-tile">
                   <div class="arch-icon">🚀</div>
                   <div>
-                    <h4 class="arch-title">客户端剥离 Git 源码依赖</h4>
-                    <p class="arch-desc">客户端不再提供源码级 Git 上传功能，仅保留纯净下载与版本检查通道，避免版本混乱与配置覆盖冲突。</p>
+                    <h4 class="arch-title">纯净分发</h4>
+                    <p class="arch-desc">无需本地 Git 环境，直接检查并下载可执行文件。</p>
                   </div>
                 </div>
 
                 <div class="arch-tile">
                   <div class="arch-icon">☁️</div>
                   <div>
-                    <h4 class="arch-title">配置与二进制程序彻底解耦</h4>
-                    <p class="arch-desc">所有用户快捷键配置交由私有 WebDAV 托管漫游，无论软件如何升级迭代，个人自定义配置永不丢失。</p>
+                    <h4 class="arch-title">配置分离</h4>
+                    <p class="arch-desc">用户配置由 WebDAV 同步，软件更新不影响已有设置。</p>
                   </div>
                 </div>
 
                 <div class="arch-tile">
                   <div class="arch-icon">📦</div>
                   <div>
-                    <h4 class="arch-title">单文件绿色便携部署</h4>
-                    <p class="arch-desc">编译打包为独立单一的 bindx.exe，双击即可直接运行，无任何 Python 运行时、无额外 DLL 安装包依赖。</p>
+                    <h4 class="arch-title">绿色便携</h4>
+                    <p class="arch-desc">单一可执行文件，开箱即用，无外部依赖。</p>
                   </div>
                 </div>
 
                 <div class="arch-tile">
                   <div class="arch-icon">🖥️</div>
                   <div>
-                    <h4 class="arch-title">原生 Win32 低损耗调度</h4>
-                    <p class="arch-desc">使用底层操作系统消息队列，极低 CPU 占用与内存驻留，全天候在后台静默运行亦毫无负担。</p>
+                    <h4 class="arch-title">低资源占用</h4>
+                    <p class="arch-desc">底层系统原生调用，后台静默运行无额外负担。</p>
                   </div>
                 </div>
               </div>
@@ -887,12 +887,12 @@
           </div>
         </div>
 
-        <!-- 6. 偏好设置 (Settings) -->
+        <!-- 6. 设置 (Settings) -->
         <div v-if="currentTab === 'settings'" class="tab-pane">
           <div class="pane-header">
             <div>
-              <h2>通用偏好设置</h2>
-              <p class="subtitle">调整 Windows 系统集成、界面外观与底层按键模拟阈值</p>
+              <h2>设置</h2>
+              <p class="subtitle">外观主题与系统行为偏好</p>
             </div>
             <div class="actions">
               <button class="btn btn-primary" @click="saveAll">保存设置</button>
@@ -907,8 +907,8 @@
                   <Palette class="w-5 h-5 text-indigo-500" />
                 </div>
                 <div>
-                  <h3 class="section-title">界面外观主题</h3>
-                  <p class="section-desc">告别沉闷死黑，选择最契合您审美的视觉主题，随时自由切换</p>
+                  <h3 class="section-title">外观风格</h3>
+                  <p class="section-desc">选择深浅视觉风格</p>
                 </div>
               </div>
             </div>
@@ -923,8 +923,8 @@
                   <Sun class="w-5 h-5 text-amber-500" />
                 </div>
                 <div class="theme-meta">
-                  <span class="name">现代清爽浅色 (默认)</span>
-                  <span class="desc">明快舒适 · 纯净白底磨砂微阴影</span>
+                  <span class="name">浅色</span>
+                  <span class="desc">默认浅色风格</span>
                 </div>
                 <div class="theme-check" v-if="(config.app?.theme || 'light') === 'light'">
                   <CheckCircle2 class="w-4 h-4 text-indigo-600" />
@@ -940,8 +940,8 @@
                   <Moon class="w-5 h-5 text-indigo-400" />
                 </div>
                 <div class="theme-meta">
-                  <span class="name">柔和灰蓝质感</span>
-                  <span class="desc">低饱和磨砂 · 护眼现代深色</span>
+                  <span class="name">深色</span>
+                  <span class="desc">柔和灰蓝风格</span>
                 </div>
                 <div class="theme-check" v-if="config.app?.theme === 'slate'">
                   <CheckCircle2 class="w-4 h-4 text-cyan-400" />
@@ -958,8 +958,8 @@
                   <Monitor class="w-5 h-5 text-cyan-500" />
                 </div>
                 <div>
-                  <h3 class="section-title">Windows 系统集成与行为控制</h3>
-                  <p class="section-desc">深度集成 Windows 11 / 10 核心消息泵与持久化配置</p>
+                  <h3 class="section-title">系统选项</h3>
+                  <p class="section-desc">开机自启与按键模拟偏好</p>
                 </div>
               </div>
             </div>
@@ -971,8 +971,8 @@
                   <Monitor class="w-5 h-5 text-indigo-500" />
                 </div>
                 <div class="tile-content">
-                  <span class="tile-title">Windows 开机自动启动</span>
-                  <span class="tile-desc">在系统登录完成后，自动以静默方式在任务栏托盘驻留，确保快捷键实时响应</span>
+                  <span class="tile-title">开机自动启动</span>
+                  <span class="tile-desc">系统登录后自动在托盘后台运行</span>
                 </div>
                 <div class="tile-action">
                   <label class="toggle-switch">
@@ -988,8 +988,8 @@
                   <Keyboard class="w-5 h-5 text-cyan-500" />
                 </div>
                 <div class="tile-content">
-                  <span class="tile-title">自动恢复修饰键状态 (Restore Held Modifiers)</span>
-                  <span class="tile-desc">模拟按键输出后，自动补发松开事件，防止 Ctrl / Alt / Shift 产生系统粘滞</span>
+                  <span class="tile-title">自动释放修饰键</span>
+                  <span class="tile-desc">模拟按键后自动松开 Ctrl、Alt 等按键，避免粘滞</span>
                 </div>
                 <div class="tile-action">
                   <label class="toggle-switch">
@@ -1005,8 +1005,8 @@
                   <Sliders class="w-5 h-5 text-purple-500" />
                 </div>
                 <div class="tile-content">
-                  <span class="tile-title">按键模拟延迟 (Dispatch Delay)</span>
-                  <span class="tile-desc">微小延迟确保第三方受控软件（如终端、浏览器、音乐播放器）可靠捕获按键序列</span>
+                  <span class="tile-title">按键模拟延迟</span>
+                  <span class="tile-desc">模拟击键间隔时间，推荐 20 ms</span>
                 </div>
                 <div class="tile-action-slider">
                   <span class="slider-badge">{{ config.app.output_delay_ms }} ms</span>
@@ -1028,8 +1028,8 @@
                   <Folder class="w-5 h-5 text-emerald-500" />
                 </div>
                 <div class="tile-content">
-                  <span class="tile-title">配置文件物理存储路径</span>
-                  <span class="tile-desc">快捷键规则、侧键绑定与 WebDAV 配置均持久化保存在当前程序根目录的 JSON 文件中</span>
+                  <span class="tile-title">配置文件路径</span>
+                  <span class="tile-desc">规则与设置持久化存储于本地 JSON 文件</span>
                 </div>
                 <div class="tile-action-path">
                   <span class="path-badge">data/bindx_config.json</span>
@@ -1049,23 +1049,23 @@
     <div v-if="hotkeyModal.show" class="modal-backdrop">
       <div class="modal-dialog glass-panel">
         <div class="modal-header">
-          <h3>{{ hotkeyModal.isEdit ? '编辑快捷键规则' : '添加全局快捷键规则' }}</h3>
+          <h3>{{ hotkeyModal.isEdit ? '编辑快捷键' : '添加快捷键' }}</h3>
           <button class="modal-close" @click="hotkeyModal.show = false">×</button>
         </div>
 
         <div class="modal-body form-grid">
           <div class="form-item col-span-2">
-            <label class="form-label">按键组合 (触发快捷键)</label>
+            <label class="form-label">快捷键</label>
             <input 
               type="text" 
               class="input-field" 
-              placeholder="例如: CTRL+ALT+Q"
+              placeholder="例如: Ctrl+Alt+Q"
               v-model="hotkeyModal.data.hotkey"
             />
           </div>
 
           <div class="form-item">
-            <label class="form-label">应用标识 / 别名</label>
+            <label class="form-label">应用标识</label>
             <input 
               type="text" 
               class="input-field" 
@@ -1075,36 +1075,36 @@
           </div>
 
           <div class="form-item">
-            <label class="form-label">目标类型 (Target Type)</label>
+            <label class="form-label">目标类型</label>
             <select class="input-field" v-model="hotkeyModal.data.target_type">
-              <option value="win32">Win32 桌面客户端</option>
-              <option value="browser_tab">Edge / Chrome 网页标签</option>
-              <option value="builtin">内置系统项 (Termius / BindX)</option>
+              <option value="win32">桌面客户端</option>
+              <option value="browser_tab">网页标签页</option>
+              <option value="builtin">内置应用</option>
             </select>
           </div>
 
           <div v-if="hotkeyModal.data.target_type === 'browser_tab'" class="form-item col-span-2">
-            <label class="form-label">网页标签标题关键字 (Title Keyword)</label>
+            <label class="form-label">标签页标题关键字</label>
             <input 
               type="text" 
               class="input-field" 
-              placeholder="例如: 千问、Gemini、ChatGPT"
+              placeholder="例如: 千问、Gemini"
               v-model="hotkeyModal.data.title_keyword"
             />
           </div>
 
           <div class="form-item col-span-2">
-            <label class="form-label">可执行程序名称 (Exe Name, 留空自动推断)</label>
+            <label class="form-label">程序文件名</label>
             <input 
               type="text" 
               class="input-field" 
-              placeholder="例如: cloudmusic.exe, msedge.exe"
+              placeholder="例如: cloudmusic.exe，留空自动推断"
               v-model="hotkeyModal.data.exe_name"
             />
           </div>
 
           <div class="form-item col-span-2">
-            <label class="form-label">程序安装路径 (未运行时可自动启动)</label>
+            <label class="form-label">程序路径</label>
             <input 
               type="text" 
               class="input-field" 
@@ -1116,7 +1116,7 @@
 
         <div class="modal-footer">
           <button class="btn btn-secondary" @click="hotkeyModal.show = false">取消</button>
-          <button class="btn btn-primary" @click="saveHotkeyModal">保存规则</button>
+          <button class="btn btn-primary" @click="saveHotkeyModal">保存</button>
         </div>
       </div>
     </div>
@@ -1190,7 +1190,7 @@ const setTheme = async (themeName) => {
   config.value.app.theme = themeName
   try {
     await invoke('update_config', { newConfig: config.value })
-    showToast(`已切换至${themeName === 'light' ? '现代清爽浅色' : '柔和灰蓝质感'}主题`, 'success')
+    showToast(`已切换至${themeName === 'light' ? '浅色' : '深色'}主题`, 'success')
   } catch (err) {
     console.error('Failed to save theme:', err)
   }
@@ -1265,12 +1265,12 @@ const activeHotkeysCount = computed(() => {
 })
 
 const navItems = [
-  { id: 'overview', label: '运行概览', icon: LayoutDashboard },
-  { id: 'hotkeys', label: '应用快捷键', icon: Keyboard },
-  { id: 'remap', label: '按键与鼠标重映射', icon: MousePointer },
-  { id: 'webdav', label: 'WebDAV 云同步', icon: Cloud },
-  { id: 'update', label: '软件下载与更新', icon: DownloadCloud },
-  { id: 'settings', label: '偏好设置', icon: Settings },
+  { id: 'overview', label: '概览', icon: LayoutDashboard },
+  { id: 'hotkeys', label: '快捷键', icon: Keyboard },
+  { id: 'remap', label: '按键映射', icon: MousePointer },
+  { id: 'webdav', label: '云同步', icon: Cloud },
+  { id: 'update', label: '版本更新', icon: DownloadCloud },
+  { id: 'settings', label: '设置', icon: Settings },
 ]
 
 // Fetch config from backend
@@ -1290,7 +1290,7 @@ const fetchConfig = async () => {
 const saveAll = async () => {
   try {
     await invoke('update_config', { newConfig: config.value })
-    showToast('配置已保存并同步热重载', 'success')
+    showToast('设置已保存', 'success')
   } catch (e) {
     showToast('保存失败: ' + e, 'danger')
   }
@@ -1300,18 +1300,18 @@ const saveAll = async () => {
 const onToggleHotkeyEngine = async () => {
   try {
     await invoke('toggle_hotkey_engine', { enable: config.value.app.hotkey_running })
-    showToast(config.value.app.hotkey_running ? '快捷键引擎已启动' : '快捷键引擎已暂停', 'info')
+    showToast(config.value.app.hotkey_running ? '快捷键监听已启动' : '快捷键监听已暂停', 'info')
   } catch (e) {
-    showToast('切换快捷键引擎失败: ' + e, 'danger')
+    showToast('切换快捷键服务失败: ' + e, 'danger')
   }
 }
 
 const onToggleMouseEngine = async () => {
   try {
     await invoke('toggle_mouse_engine', { enable: config.value.app.mouse_running })
-    showToast(config.value.app.mouse_running ? '鼠标重映射引擎已启动' : '鼠标重映射引擎已停止', 'info')
+    showToast(config.value.app.mouse_running ? '侧键监听已启动' : '侧键监听已停止', 'info')
   } catch (e) {
-    showToast('切换鼠标重映射失败: ' + e, 'danger')
+    showToast('切换侧键监听失败: ' + e, 'danger')
   }
 }
 
@@ -1319,18 +1319,18 @@ const onToggleMouseEngine = async () => {
 const formatTargetType = (type) => {
   switch (type) {
     case 'browser_tab': return '网页标签'
-    case 'builtin': return '内置项目'
+    case 'builtin': return '内置应用'
     case 'win32':
-    default: return '桌面程序'
+    default: return '桌面客户端'
   }
 }
 
 const formatBehavior = (profile) => {
   if (!profile) return '普通呼出'
   const h = profile.hide_behavior || ''
-  if (h.includes('tray')) return '托盘收起 / 激活'
-  if (h.includes('minimize')) return '最小化 / 激活'
-  return '切换激活'
+  if (h.includes('tray')) return '托盘切换'
+  if (h.includes('minimize')) return '最小化切换'
+  return '窗口切换'
 }
 
 // Hotkey Modal
@@ -1402,7 +1402,7 @@ const addKeyMapping = () => {
   config.value.mouse.mappings.push({
     trigger: ['ctrl', 'p'],
     output: ['ctrl', 'alt', 'w'],
-    description: '新按键重映射',
+    description: '组合键映射',
     enabled: true
   })
   saveAll()
@@ -1416,7 +1416,7 @@ const deleteKeyMapping = (index) => {
 const setMousePreset = (mapping, keys) => {
   mapping.output = [...keys]
   saveAll()
-  showToast(`已应用快捷键预设: ${keys.join(' + ').toUpperCase()}`, 'info')
+  showToast(`已设为 ${keys.join('+').toUpperCase()}`, 'info')
 }
 
 // WebDAV Operations
@@ -1430,7 +1430,7 @@ const onTestWebDav = async () => {
     const res = await invoke('test_webdav', { config: config.value.webdav })
     showToast(res, 'success')
   } catch (e) {
-    showToast('测试连接失败: ' + e, 'danger', 6000)
+    showToast('测试连接失败: ' + e, 'danger', 5000)
   } finally {
     testingWebDav.value = false
   }
@@ -1442,7 +1442,7 @@ const onUploadWebDav = async () => {
     const res = await invoke('upload_to_webdav', { config: config.value.webdav })
     showToast(res, 'success')
   } catch (e) {
-    showToast('上传备份失败: ' + e, 'danger', 6000)
+    showToast('上传配置失败: ' + e, 'danger', 5000)
   } finally {
     uploadingWebDav.value = false
   }
@@ -1453,9 +1453,9 @@ const onDownloadWebDav = async () => {
   try {
     const downloaded = await invoke('download_from_webdav', { config: config.value.webdav })
     config.value = downloaded
-    showToast('已成功从云端下载并立即应用最新配置！', 'success')
+    showToast('配置同步成功', 'success')
   } catch (e) {
-    showToast('下载同步失败: ' + e, 'danger', 6000)
+    showToast('同步失败: ' + e, 'danger', 5000)
   } finally {
     downloadingWebDav.value = false
   }
@@ -1467,19 +1467,19 @@ const applyWebDavPreset = (preset) => {
     config.value.webdav.username = 'gxy'
     config.value.webdav.password = '***REMOVED***'
     config.value.webdav.remote_filename = 'bindx/bindx_config.json'
-    showToast('已填入您的自建 WebDAV 服务器凭据与 /bindx 目录', 'info')
+    showToast('已载入自建服务配置', 'info')
   } else if (preset === 'jianguoyun') {
     config.value.webdav.server_url = 'https://dav.jianguoyun.com/dav/'
     config.value.webdav.remote_filename = 'bindx/bindx_config.json'
-    showToast('已填入坚果云服务器地址，请输入您的坚果云账号和应用授权密码', 'info')
+    showToast('已载入坚果云地址', 'info')
   } else if (preset === 'alist') {
     config.value.webdav.server_url = 'http://127.0.0.1:5244/dav/'
     config.value.webdav.remote_filename = 'bindx/bindx_config.json'
-    showToast('已填入 Alist 默认本地 WebDAV 地址', 'info')
+    showToast('已载入 Alist 地址', 'info')
   } else if (preset === 'nextcloud') {
     config.value.webdav.server_url = 'https://your-nextcloud.com/remote.php/dav/files/USERNAME/'
     config.value.webdav.remote_filename = 'bindx/bindx_config.json'
-    showToast('已填入 Nextcloud 模板，请替换域名和用户名', 'info')
+    showToast('已载入 Nextcloud 模板', 'info')
   }
 }
 
@@ -1493,7 +1493,7 @@ const onCheckUpdate = async () => {
     const res = await invoke('check_software_update', { updateUrl: config.value.updater.update_url })
     updateInfo.value = res
     if (res.has_update) {
-      showToast(`发现新版本 ${res.latest_version}！`, 'success')
+      showToast(`发现新版本 ${res.latest_version}`, 'success')
     } else {
       showToast('当前已是最新版本', 'info')
     }
