@@ -17,6 +17,9 @@
         </div>
       </div>
 
+      <!-- Drag spacer between brand and status -->
+      <div class="header-drag-spacer" data-tauri-drag-region></div>
+
       <div class="header-status" data-tauri-drag-region>
         <!-- Hotkey Engine Pill -->
         <div class="status-pill" :class="{ active: config.app.hotkey_running }">
@@ -43,6 +46,9 @@
           自启: {{ config.app.autostart_enabled ? '开' : '关' }}
         </div>
       </div>
+
+      <!-- Drag spacer between status and window controls -->
+      <div class="header-drag-spacer" data-tauri-drag-region></div>
 
       <!-- Window Control Buttons (Native Windows 11 Fluent style) -->
       <div class="window-controls">
@@ -457,16 +463,17 @@
 
               <div class="form-item">
                 <label class="form-label">密码 / 应用专属授权码</label>
-                <div class="relative">
+                <div class="password-input-wrapper">
                   <input 
                     :type="showPassword ? 'text' : 'password'" 
-                    class="input-field pr-10" 
+                    class="input-field password-input" 
                     placeholder="••••••••••••"
                     v-model="config.webdav.password" 
                   />
                   <button 
                     type="button" 
-                    class="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-200"
+                    class="eye-btn"
+                    title="切换显示/隐藏密码"
                     @click="showPassword = !showPassword"
                   >
                     <Eye v-if="!showPassword" class="w-4 h-4" />
@@ -761,15 +768,11 @@ const hideWindow = () => {
 }
 
 const onHeaderMouseDown = async (e) => {
-  if (e.button === 0 && !e.target.closest('button, input, select, label, .window-controls')) {
+  if (e.button === 0 && !e.target.closest('button, input, select, label, .window-controls, .toggle-switch')) {
     try {
-      await invoke('drag_window')
-    } catch {
-      try {
-        await appWindow.startDragging()
-      } catch (err) {
-        console.error('startDragging error:', err)
-      }
+      await appWindow.startDragging()
+    } catch (err) {
+      console.warn('startDragging error:', err)
     }
   }
 }
@@ -1100,12 +1103,15 @@ onMounted(() => {
   padding: 0 10px 0 16px;
   flex-shrink: 0;
   user-select: none;
+  -webkit-app-region: drag;
+  cursor: default;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
+  -webkit-app-region: drag;
 }
 .logo-box {
   display: flex;
@@ -1117,16 +1123,19 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.95);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   padding: 3px;
+  -webkit-app-region: drag;
 }
 .brand-icon {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  pointer-events: none;
 }
 .brand-text {
   display: flex;
   align-items: center;
   gap: 8px;
+  -webkit-app-region: drag;
 }
 .brand-text .title {
   font-size: 15px;
@@ -1135,6 +1144,15 @@ onMounted(() => {
   background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  -webkit-app-region: drag;
+  pointer-events: none;
+}
+
+.header-drag-spacer {
+  flex: 1;
+  height: 100%;
+  min-width: 16px;
+  -webkit-app-region: drag;
 }
 
 .window-controls {
@@ -1142,6 +1160,7 @@ onMounted(() => {
   align-items: center;
   gap: 2px;
   margin-left: 14px;
+  -webkit-app-region: no-drag;
 }
 .win-btn {
   width: 34px;
@@ -1155,6 +1174,7 @@ onMounted(() => {
   color: #94a3b8;
   cursor: pointer;
   transition: all 0.15s ease;
+  -webkit-app-region: no-drag;
 }
 .win-btn:hover {
   background: rgba(255, 255, 255, 0.1);
@@ -1172,12 +1192,15 @@ onMounted(() => {
   color: #38bdf8;
   border-radius: 9999px;
   font-weight: 600;
+  -webkit-app-region: drag;
+  pointer-events: none;
 }
 
 .header-status {
   display: flex;
   align-items: center;
   gap: 10px;
+  -webkit-app-region: drag;
 }
 
 .status-pill {
@@ -1190,6 +1213,7 @@ onMounted(() => {
   border-radius: 9999px;
   font-size: 11px;
   color: #94a3b8;
+  -webkit-app-region: no-drag;
 }
 .status-pill.active {
   background: rgba(16, 185, 129, 0.1);
@@ -1213,6 +1237,7 @@ onMounted(() => {
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.05);
   color: #94a3b8;
+  -webkit-app-region: no-drag;
 }
 .badge-pill.enabled {
   color: #818cf8;
@@ -1629,6 +1654,38 @@ onMounted(() => {
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.password-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.password-input {
+  padding-right: 40px !important;
+}
+.eye-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  color: #94a3b8;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+.eye-btn:hover {
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.08) !important;
 }
 
 .fade-enter-active, .fade-leave-active {
