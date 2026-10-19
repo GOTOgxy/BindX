@@ -51,6 +51,20 @@ pub async fn check_for_updates(update_url: &str) -> Result<UpdateCheckResult, St
         .await
         .map_err(|e| format!("检查更新网络请求失败: {}", e))?;
 
+    if res.status() == reqwest::StatusCode::NOT_FOUND {
+        // GitHub returns 404 when no releases have been published to the repository yet
+        return Ok(UpdateCheckResult {
+            has_update: false,
+            current_version: format!("v{}", current_version),
+            latest_version: format!("v{}", current_version),
+            release_name: "当前已是最新".to_string(),
+            release_notes: "云端仓库暂无新发布的 Release 版本，当前本地运行版本为最新。".to_string(),
+            published_at: String::new(),
+            download_url: String::new(),
+            release_page_url: "https://github.com/GOTOgxy/BindX/releases".to_string(),
+        });
+    }
+
     if !res.status().is_success() {
         return Err(format!("检查更新失败，服务器返回: HTTP {}", res.status().as_u16()));
     }
