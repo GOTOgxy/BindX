@@ -1200,14 +1200,14 @@
 
           <div class="form-item">
             <label class="form-label">目标类型</label>
-            <select class="input-field" v-model="hotkeyModal.data.target_type">
+            <select class="input-field" v-model="hotkeyModal.data.target_type" @change="onTargetTypeChange">
               <option value="win32">桌面客户端 (普通可执行程序)</option>
               <option value="builtin">内置预设 (主流预置应用)</option>
               <option value="browser_tab">网页标签页 (按标题匹配)</option>
             </select>
           </div>
 
-          <div class="form-item">
+          <div v-if="hotkeyModal.data.target_type !== 'browser_tab'" class="form-item">
             <label class="form-label">切换行为</label>
             <select class="input-field" v-model="hotkeyModal.data._runtime_profile.hide_behavior">
               <option value="minimize">最小化切换 (默认，前台再次按下最小化)</option>
@@ -1215,54 +1215,91 @@
               <option value="hide">窗口隐藏 (SW_HIDE 直接隐藏)</option>
             </select>
           </div>
-
-          <div v-if="hotkeyModal.data.target_type === 'browser_tab'" class="form-item col-span-2">
-            <label class="form-label">标签页标题关键字</label>
-            <input 
-              type="text" 
-              class="input-field" 
-              placeholder="例如: 千问、Gemini"
-              v-model="hotkeyModal.data.title_keyword"
-            />
+          <div v-else class="form-item">
+            <label class="form-label">切换行为</label>
+            <select class="input-field" v-model="hotkeyModal.data._runtime_profile.hide_behavior">
+              <option value="minimize">最小化切换 (前台再次按下最小化)</option>
+              <option value="hide">窗口隐藏 (SW_HIDE 直接隐藏)</option>
+            </select>
           </div>
 
-          <div class="form-item col-span-2">
-            <label class="form-label">程序进程文件名</label>
-            <input 
-              type="text" 
-              class="input-field" 
-              placeholder="例如: cloudmusic.exe，留空可从路径自动推断"
-              v-model="hotkeyModal.data.exe_name"
-            />
-          </div>
-
-          <div class="form-item col-span-2">
-            <label class="form-label">程序路径 (可选)</label>
-            <div class="flex gap-2">
+          <!-- When target_type is browser_tab -->
+          <template v-if="hotkeyModal.data.target_type === 'browser_tab'">
+            <div class="form-item col-span-2">
+              <label class="form-label">标签页标题关键字 (必填)</label>
               <input 
                 type="text" 
-                class="input-field flex-1" 
-                placeholder="例如: D:\Program Files\App\app.exe (可留空自动识别)"
-                v-model="hotkeyModal.data.install_path"
+                class="input-field" 
+                placeholder="例如: 千问、Gemini、Bilibili、知乎"
+                v-model="hotkeyModal.data.title_keyword"
               />
-              <button type="button" class="btn btn-secondary whitespace-nowrap" @click="pickExecutableFile">
-                <FolderOpen class="w-4 h-4 mr-1" />
-                <span>浏览...</span>
-              </button>
+              <span class="field-hint">
+                浏览器会将活动标签页标题显示在窗口上。输入网页标题中的任意关键字，即可瞬间呼出对应窗口。
+              </span>
             </div>
-            <span class="field-hint">点击“浏览”可通过 Windows 原生文件窗口选择本地 .exe 文件</span>
-          </div>
 
-          <div class="form-item col-span-2 flex items-center justify-between pt-1">
-            <div>
-              <span class="font-medium text-sm text-main">程序未运行时自动启动</span>
-              <p class="text-xs text-muted">按下快捷键时若应用未运行，自动启动程序</p>
+            <div class="form-item col-span-2">
+              <label class="form-label">所属浏览器进程</label>
+              <select class="input-field" v-model="browserPresetSelection" @change="onBrowserPresetChange">
+                <option value="auto">自动匹配所有浏览器 (默认推荐，无需关心是 Edge 还是 Chrome)</option>
+                <option value="msedge.exe">Microsoft Edge (msedge.exe)</option>
+                <option value="chrome.exe">Google Chrome (chrome.exe)</option>
+                <option value="custom">其他自定义浏览器进程...</option>
+              </select>
             </div>
-            <label class="toggle-switch">
-              <input type="checkbox" v-model="hotkeyModal.data.launch_if_not_running" />
-              <span class="slider"></span>
-            </label>
-          </div>
+
+            <div v-if="browserPresetSelection === 'custom'" class="form-item col-span-2">
+              <label class="form-label">自定义浏览器进程文件名</label>
+              <input 
+                type="text" 
+                class="input-field" 
+                placeholder="例如: brave.exe、firefox.exe、360chrome.exe"
+                v-model="hotkeyModal.data.exe_name"
+              />
+              <span class="field-hint">限定只在该浏览器进程中查找网页</span>
+            </div>
+          </template>
+
+          <!-- When target_type is NOT browser_tab -->
+          <template v-else>
+            <div class="form-item col-span-2">
+              <label class="form-label">程序进程文件名</label>
+              <input 
+                type="text" 
+                class="input-field" 
+                placeholder="例如: cloudmusic.exe，留空可从路径自动推断"
+                v-model="hotkeyModal.data.exe_name"
+              />
+            </div>
+
+            <div class="form-item col-span-2">
+              <label class="form-label">程序路径 (可选)</label>
+              <div class="flex gap-2">
+                <input 
+                  type="text" 
+                  class="input-field flex-1" 
+                  placeholder="例如: D:\Program Files\App\app.exe (可留空自动识别)"
+                  v-model="hotkeyModal.data.install_path"
+                />
+                <button type="button" class="btn btn-secondary whitespace-nowrap" @click="pickExecutableFile">
+                  <FolderOpen class="w-4 h-4 mr-1" />
+                  <span>浏览...</span>
+                </button>
+              </div>
+              <span class="field-hint">点击“浏览”可通过 Windows 原生文件窗口选择本地 .exe 文件</span>
+            </div>
+
+            <div class="form-item col-span-2 flex items-center justify-between pt-1">
+              <div>
+                <span class="font-medium text-sm text-main">程序未运行时自动启动</span>
+                <p class="text-xs text-muted">按下快捷键时若应用未运行，自动启动程序</p>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" v-model="hotkeyModal.data.launch_if_not_running" />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </template>
         </div>
 
         <div class="modal-footer">
@@ -1724,6 +1761,41 @@ const onHotkeyRecordKeyDown = (e) => {
   }
 }
 
+const browserPresetSelection = ref('auto')
+
+const updateBrowserPresetSelectionFromData = () => {
+  const exe = (hotkeyModal.value.data.exe_name || '').trim().toLowerCase()
+  if (!exe) {
+    browserPresetSelection.value = 'auto'
+  } else if (exe === 'msedge.exe') {
+    browserPresetSelection.value = 'msedge.exe'
+  } else if (exe === 'chrome.exe') {
+    browserPresetSelection.value = 'chrome.exe'
+  } else {
+    browserPresetSelection.value = 'custom'
+  }
+}
+
+const onBrowserPresetChange = () => {
+  if (browserPresetSelection.value === 'auto') {
+    hotkeyModal.value.data.exe_name = ''
+  } else if (browserPresetSelection.value === 'msedge.exe') {
+    hotkeyModal.value.data.exe_name = 'msedge.exe'
+  } else if (browserPresetSelection.value === 'chrome.exe') {
+    hotkeyModal.value.data.exe_name = 'chrome.exe'
+  } else if (browserPresetSelection.value === 'custom') {
+    if (['msedge.exe', 'chrome.exe'].includes(hotkeyModal.value.data.exe_name?.toLowerCase())) {
+      hotkeyModal.value.data.exe_name = ''
+    }
+  }
+}
+
+const onTargetTypeChange = () => {
+  if (hotkeyModal.value.data.target_type === 'browser_tab') {
+    updateBrowserPresetSelectionFromData()
+  }
+}
+
 const openAddHotkeyModal = () => {
   isRecordingHotkey.value = false
   isHotkeyBoxFocused.value = false
@@ -1747,6 +1819,7 @@ const openAddHotkeyModal = () => {
       }
     }
   }
+  updateBrowserPresetSelectionFromData()
 }
 
 const editHotkey = (entry, index) => {
@@ -1764,6 +1837,7 @@ const editHotkey = (entry, index) => {
     index,
     data
   }
+  updateBrowserPresetSelectionFromData()
 }
 
 const applyHotkeyPreset = (preset) => {
@@ -1822,7 +1896,12 @@ const applyHotkeyPreset = (preset) => {
     case 'browser_tab':
       hotkeyModal.value.data.target_type = 'browser_tab'
       hotkeyModal.value.data.name = hotkeyModal.value.data.name || '网页标签页'
+      hotkeyModal.value.data.exe_name = ''
+      hotkeyModal.value.data.title_keyword = hotkeyModal.value.data.title_keyword || '千问'
+      hotkeyModal.value.data.install_path = ''
+      hotkeyModal.value.data.launch_if_not_running = false
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      updateBrowserPresetSelectionFromData()
       break
     default:
       hotkeyModal.value.data.target_type = 'win32'
@@ -1861,8 +1940,24 @@ const saveHotkeyModal = () => {
     showToast('快捷键组合不能为空', 'danger')
     return
   }
+  if (!hotkeyModal.value.data.name?.trim()) {
+    if (hotkeyModal.value.data.target_type === 'browser_tab' && hotkeyModal.value.data.title_keyword) {
+      hotkeyModal.value.data.name = `网页: ${hotkeyModal.value.data.title_keyword}`
+    } else if (hotkeyModal.value.data.exe_name) {
+      hotkeyModal.value.data.name = hotkeyModal.value.data.exe_name.replace(/\.exe$/i, '')
+    } else {
+      hotkeyModal.value.data.name = '快捷键应用'
+    }
+  }
   if (!hotkeyModal.value.data.app) {
     hotkeyModal.value.data.app = hotkeyModal.value.data.name || 'app'
+  }
+  if (hotkeyModal.value.data.target_type === 'browser_tab') {
+    if (browserPresetSelection.value === 'auto') {
+      hotkeyModal.value.data.exe_name = ''
+    }
+    hotkeyModal.value.data.install_path = ''
+    hotkeyModal.value.data.launch_if_not_running = false
   }
   if (hotkeyModal.value.isEdit) {
     config.value.hotkeys.entries[hotkeyModal.value.index] = hotkeyModal.value.data
@@ -3783,16 +3878,23 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   z-index: 200;
+  padding: 16px;
 }
 .modal-dialog {
-  width: 520px;
-  padding: 28px;
+  width: 540px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 36px);
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  overflow: hidden;
 }
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
 }
 .modal-header h3 {
   font-size: 17px;
@@ -3809,13 +3911,21 @@ onMounted(() => {
 .modal-close:hover {
   color: var(--text-main);
 }
+.modal-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 6px;
+  margin-right: -4px;
+}
 .modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 24px;
-  padding-top: 18px;
+  margin-top: 16px;
+  padding-top: 16px;
   border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .password-input-wrapper {

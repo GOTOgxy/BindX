@@ -206,6 +206,13 @@ struct SearchCriteria<'a> {
 }
 
 pub fn find_window(exe_name: Option<&str>, title_keyword: Option<&str>) -> Option<HWND> {
+    let exe_name = exe_name.map(|s| s.trim()).filter(|s| !s.is_empty());
+    let title_keyword = title_keyword.map(|s| s.trim()).filter(|s| !s.is_empty());
+
+    if exe_name.is_none() && title_keyword.is_none() {
+        return None;
+    }
+
     let mut criteria = SearchCriteria {
         exe_name,
         title_keyword,
