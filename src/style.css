@@ -281,3 +281,32 @@ input:checked + .slider {
 input:checked + .slider:before {
   transform: translateX(20px);
 }
+
+/* Utilities */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+.text-xs {
+  font-size: 11.5px;
+}
+.text-sm {
+  font-size: 13px;
+}
+.text-main {
+  color: var(--text-main);
+}
+.text-secondary {
+  color: var(--text-secondary);
+}
+.text-muted {
+  color: var(--text-muted);
+}
+.text-dim {
+  color: var(--text-dim);
+}
+

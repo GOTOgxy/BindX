@@ -682,11 +682,11 @@
                 </div>
                 <div class="sync-status-row">
                   <span class="sync-label">远程目录:</span>
-                  <span class="font-mono text-xs text-main">/bindx/</span>
+                  <span class="font-mono text-xs text-main">{{ remoteDirectory }}</span>
                 </div>
                 <div class="sync-status-row">
                   <span class="sync-label">完整路径:</span>
-                  <span class="font-mono text-xs text-muted truncate" :title="resolvedWebDavUrl">
+                  <span class="font-mono text-xs text-muted truncate sync-value" :title="resolvedWebDavUrl">
                     {{ resolvedWebDavUrl || '未配置' }}
                   </span>
                 </div>
@@ -1527,6 +1527,15 @@ const resolvedWebDavUrl = computed(() => {
   let path = (config.value.webdav.remote_filename || 'bindx/bindx_config.json').trim()
   while (path.startsWith('/')) path = path.slice(1)
   return base + path
+})
+
+const remoteDirectory = computed(() => {
+  const filename = (config.value.webdav.remote_filename || 'bindx/bindx_config.json').trim()
+  const parts = filename.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.length > 1) {
+    return '/' + parts.slice(0, -1).join('/') + '/'
+  }
+  return '/'
 })
 
 // Global hook for tray
@@ -2469,7 +2478,7 @@ onMounted(() => {
 /* WebDAV Dashboard Layout */
 .webdav-dashboard-grid {
   display: grid;
-  grid-template-columns: 1.35fr 1fr;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
@@ -2479,6 +2488,7 @@ onMounted(() => {
   flex-direction: column;
   gap: 20px;
   border-radius: 14px;
+  min-width: 0;
 }
 .preset-section {
   display: flex;
@@ -2544,18 +2554,24 @@ onMounted(() => {
   background: var(--bg-card-subtle);
   border-radius: 10px;
   border: 1px solid var(--border-color);
+  min-width: 0;
 }
 .sync-status-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-size: 12.5px;
-  gap: 10px;
+  gap: 12px;
+  min-width: 0;
 }
 .sync-label {
   color: var(--text-secondary);
   font-weight: 500;
   flex-shrink: 0;
+}
+.sync-value {
+  min-width: 0;
+  text-align: right;
 }
 .sync-actions-list {
   display: flex;
@@ -2599,7 +2615,7 @@ onMounted(() => {
 /* Update Dashboard Layout */
 .update-dashboard-grid {
   display: grid;
-  grid-template-columns: 1.15fr 1fr;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
@@ -2609,6 +2625,7 @@ onMounted(() => {
   flex-direction: column;
   gap: 18px;
   border-radius: 14px;
+  min-width: 0;
 }
 .hero-header-box {
   display: flex;
