@@ -93,7 +93,8 @@ pub fn run() {
             download_from_webdav,
             check_software_update,
             open_external_url,
-            select_executable_file
+            select_executable_file,
+            set_recording_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

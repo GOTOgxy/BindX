@@ -228,3 +228,15 @@ pub fn select_executable_file() -> Result<Option<String>, String> {
     }
 }
 
+#[tauri::command]
+pub fn set_recording_state(state: tauri::State<'_, AppState>, active: bool) -> Result<(), String> {
+    if active {
+        state.hotkey_engine.pause();
+        state.remap_engine.set_recording_paused(true);
+    } else {
+        state.hotkey_engine.resume();
+        state.remap_engine.set_recording_paused(false);
+    }
+    Ok(())
+}
+

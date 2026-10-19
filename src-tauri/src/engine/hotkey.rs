@@ -16,6 +16,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 const WM_HOTKEY_RELOAD: u32 = WM_USER + 101;
+const WM_HOTKEY_PAUSE: u32 = WM_USER + 102;
+const WM_HOTKEY_RESUME: u32 = WM_USER + 103;
 
 pub struct RegisteredRule {
     pub id: i32,
@@ -88,6 +90,17 @@ impl HotkeyEngine {
                         continue;
                     }
 
+                    if msg.message == WM_HOTKEY_PAUSE {
+                        unregister_all(&mut active_registered);
+                        continue;
+                    }
+
+                    if msg.message == WM_HOTKEY_RESUME {
+                        unregister_all(&mut active_registered);
+                        register_all(&mut active_registered, &rules_mutex);
+                        continue;
+                    }
+
                     if msg.message == WM_HOTKEY {
                         let hotkey_id = msg.wParam.0 as i32;
                         if let Some(rule) = active_registered.iter().find(|r| r.id == hotkey_id) {
@@ -116,6 +129,24 @@ impl HotkeyEngine {
         if tid != 0 {
             unsafe {
                 let _ = PostThreadMessageW(tid, WM_HOTKEY_RELOAD, windows::Win32::Foundation::WPARAM(0), windows::Win32::Foundation::LPARAM(0));
+            }
+        }
+    }
+
+    pub fn pause(&self) {
+        let tid = self.thread_id.load(Ordering::SeqCst);
+        if tid != 0 {
+            unsafe {
+                let _ = PostThreadMessageW(tid, WM_HOTKEY_PAUSE, windows::Win32::Foundation::WPARAM(0), windows::Win32::Foundation::LPARAM(0));
+            }
+        }
+    }
+
+    pub fn resume(&self) {
+        let tid = self.thread_id.load(Ordering::SeqCst);
+        if tid != 0 {
+            unsafe {
+                let _ = PostThreadMessageW(tid, WM_HOTKEY_RESUME, windows::Win32::Foundation::WPARAM(0), windows::Win32::Foundation::LPARAM(0));
             }
         }
     }

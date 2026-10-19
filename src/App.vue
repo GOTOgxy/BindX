@@ -1072,7 +1072,7 @@
       <div class="modal-dialog glass-panel">
         <div class="modal-header">
           <h3>{{ hotkeyModal.isEdit ? '编辑快捷键' : '添加快捷键' }}</h3>
-          <button class="modal-close" @click="hotkeyModal.show = false">×</button>
+          <button class="modal-close" @click="closeHotkeyModal">×</button>
         </div>
 
         <div class="modal-body form-grid">
@@ -1080,6 +1080,13 @@
           <div class="form-item col-span-2">
             <label class="form-label">快速应用预设（点击自动填充）</label>
             <div class="preset-chips">
+              <button 
+                type="button" 
+                class="preset-chip preset-chip-primary" 
+                @click="applyHotkeyPreset('bindx')"
+              >
+                ⚡ BindX (本软件主窗口)
+              </button>
               <button 
                 type="button" 
                 class="preset-chip" 
@@ -1132,14 +1139,14 @@
             </div>
           </div>
 
-          <!-- Hotkey Recording Section -->
+          <!-- Hotkey Recording & Manual Input Section -->
           <div class="form-item col-span-2">
             <div class="flex items-center justify-between mb-1.5">
-              <label class="form-label mb-0">快捷键组合</label>
+              <label class="form-label mb-0">快捷键组合 (支持录制与手动输入)</label>
               <div class="flex items-center gap-2">
                 <span v-if="isRecordingHotkey" class="badge-recording">
                   <span class="recording-dot"></span>
-                  正在录制... 请直接按下键盘组合键
+                  录制中 (系统热键已隔离)
                 </span>
                 <button 
                   type="button" 
@@ -1147,7 +1154,7 @@
                   :class="isRecordingHotkey ? 'btn-danger' : 'btn-secondary'"
                   @click="toggleHotkeyRecording"
                 >
-                  {{ isRecordingHotkey ? '完成录制' : '⏺ 点击录制按键' }}
+                  {{ isRecordingHotkey ? '⏹ 结束录制' : '⏺ 点击录制按键' }}
                 </button>
                 <button 
                   v-if="hotkeyModal.data.hotkey" 
@@ -1158,6 +1165,25 @@
                   清空
                 </button>
               </div>
+            </div>
+
+            <!-- Manual Editable Input Field -->
+            <div class="relative flex items-center mb-2">
+              <input 
+                type="text" 
+                class="input-field font-mono font-medium pr-10" 
+                placeholder="请录制按键或直接在此输入（例如: CTRL+ALT+W 或 ALT+SPACE）"
+                v-model="hotkeyModal.data.hotkey"
+                @focus="onHotkeyInputFocus"
+              />
+              <button 
+                type="button" 
+                class="btn-icon absolute right-2 text-indigo-500" 
+                :title="isRecordingHotkey ? '点击结束录制' : '点击开始键盘录制'"
+                @click="toggleHotkeyRecording"
+              >
+                <Keyboard class="w-4 h-4" />
+              </button>
             </div>
 
             <!-- Interactive Hotkey Recording Pad -->
@@ -1175,15 +1201,16 @@
                   <span class="keycap">{{ k.trim() }}</span>
                 </template>
                 <span v-if="isRecordingHotkey" class="text-xs text-indigo-500 font-medium ml-2">
-                  (正在录制，可直接再次按下以覆盖)
+                  (录制中：可随时再次按下以覆盖重录，完成后点击上方“结束录制”)
                 </span>
               </div>
               <div v-else-if="isRecordingHotkey" class="text-xs text-indigo-500 font-medium flex items-center gap-2">
                 <span class="recording-dot"></span>
-                <span>请在键盘上按下快捷键组合（例如按住 Ctrl + Alt + W）...</span>
+                <span>请在键盘上按下目标组合键（支持连续按下多次以覆盖）...</span>
               </div>
-              <div v-else class="text-xs text-muted">
-                点击此处或“点击录制按键”，然后直接按下键盘组合键（无需记忆书写格式）
+              <div v-else class="text-xs text-muted flex items-center gap-2">
+                <Radio class="w-3.5 h-3.5 text-indigo-400" />
+                <span>点击“点击录制按键”即可直接按下键盘，或在上方输入框直接打字输入</span>
               </div>
             </div>
           </div>
@@ -1200,9 +1227,12 @@
 
           <div class="form-item">
             <label class="form-label">目标类型</label>
-            <select class="input-field" v-model="hotkeyModal.data.target_type" @change="onTargetTypeChange">
-              <option value="win32">桌面客户端 (普通可执行程序)</option>
-              <option value="builtin">内置预设 (主流预置应用)</option>
+            <select 
+              class="input-field" 
+              :value="hotkeyModal.data.target_type === 'browser_tab' ? 'browser_tab' : 'win32'"
+              @change="e => onTargetTypeChange(e.target.value)"
+            >
+              <option value="win32">桌面客户端 (可执行程序)</option>
               <option value="browser_tab">网页标签页 (按标题匹配)</option>
             </select>
           </div>
@@ -1303,7 +1333,7 @@
         </div>
 
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="hotkeyModal.show = false">取消</button>
+          <button class="btn btn-secondary" @click="closeHotkeyModal">取消</button>
           <button class="btn btn-primary" @click="saveHotkeyModal">保存</button>
         </div>
       </div>
@@ -1314,18 +1344,18 @@
       <div class="modal-dialog glass-panel">
         <div class="modal-header">
           <h3>{{ remapModal.isEdit ? '编辑按键映射' : '添加按键映射' }}</h3>
-          <button class="modal-close" @click="remapModal.show = false">×</button>
+          <button class="modal-close" @click="closeRemapModal">×</button>
         </div>
 
         <div class="modal-body form-grid">
           <!-- Trigger Section -->
           <div class="form-item col-span-2">
             <div class="flex items-center justify-between mb-1.5">
-              <label class="form-label mb-0">触发按键 (Trigger)</label>
+              <label class="form-label mb-0">触发按键 (Trigger - 支持录制与手动输入)</label>
               <div class="flex items-center gap-2">
                 <span v-if="isRecordingTrigger" class="badge-recording">
                   <span class="recording-dot"></span>
-                  正在录制... 请按鼠标侧键或键盘按键
+                  录制中 (系统热键已隔离)
                 </span>
                 <button 
                   type="button" 
@@ -1333,7 +1363,7 @@
                   :class="isRecordingTrigger ? 'btn-danger' : 'btn-secondary'"
                   @click="toggleTriggerRecording"
                 >
-                  {{ isRecordingTrigger ? '完成录制' : '⏺ 点击录制触发键' }}
+                  {{ isRecordingTrigger ? '⏹ 结束录制' : '⏺ 点击录制触发键' }}
                 </button>
                 <button 
                   v-if="remapModal.data.trigger && remapModal.data.trigger.length > 0" 
@@ -1344,6 +1374,25 @@
                   清空
                 </button>
               </div>
+            </div>
+
+            <!-- Manual Editable Input Field for Trigger -->
+            <div class="relative flex items-center mb-2">
+              <input 
+                type="text" 
+                class="input-field font-mono text-sm pr-10" 
+                placeholder="例如: x1 或 ctrl+x1 (支持手动输入/修改代码，用 + 分隔)"
+                :value="remapModal.data.trigger ? remapModal.data.trigger.join('+') : ''"
+                @input="e => onRemapTriggerTextInput(e.target.value)"
+              />
+              <button 
+                type="button" 
+                class="btn-icon absolute right-2 text-indigo-500" 
+                :title="isRecordingTrigger ? '点击结束录制' : '点击开始捕获按键'"
+                @click="toggleTriggerRecording"
+              >
+                <MousePointer class="w-4 h-4" />
+              </button>
             </div>
 
             <!-- Trigger Recording Pad (Supports Mouse & Keyboard) -->
@@ -1365,15 +1414,16 @@
                   </span>
                 </template>
                 <span v-if="isRecordingTrigger" class="text-xs text-indigo-500 font-medium ml-2">
-                  (正在录制，可直接再次按下以覆盖)
+                  (录制中：可随时再次按下以覆盖重录，完成后点击上方“结束录制”)
                 </span>
               </div>
               <div v-else-if="isRecordingTrigger" class="text-xs text-indigo-500 font-medium flex items-center gap-2">
                 <span class="recording-dot"></span>
                 <span>请按下鼠标侧键 (X1/X2/滚轮) 或键盘组合键...</span>
               </div>
-              <div v-else class="text-xs text-muted">
-                点击此处或“点击录制触发键”，然后直接按下鼠标侧键或键盘按键
+              <div v-else class="text-xs text-muted flex items-center gap-2">
+                <MousePointer class="w-3.5 h-3.5 text-indigo-400" />
+                <span>点击“点击录制触发键”直接按键，或在上方输入框直接打字输入代码</span>
               </div>
             </div>
 
@@ -1392,11 +1442,11 @@
           <!-- Output Section -->
           <div class="form-item col-span-2">
             <div class="flex items-center justify-between mb-1.5">
-              <label class="form-label mb-0">输出按键 (Output)</label>
+              <label class="form-label mb-0">输出按键 (Output - 支持录制与手动输入)</label>
               <div class="flex items-center gap-2">
                 <span v-if="isRecordingOutput" class="badge-recording">
                   <span class="recording-dot"></span>
-                  正在录制... 请按下目标键盘组合键
+                  录制中 (系统热键已隔离)
                 </span>
                 <button 
                   type="button" 
@@ -1404,7 +1454,7 @@
                   :class="isRecordingOutput ? 'btn-danger' : 'btn-secondary'"
                   @click="toggleOutputRecording"
                 >
-                  {{ isRecordingOutput ? '完成录制' : '⏺ 点击录制输出键' }}
+                  {{ isRecordingOutput ? '⏹ 结束录制' : '⏺ 点击录制输出键' }}
                 </button>
                 <button 
                   v-if="remapModal.data.output && remapModal.data.output.length > 0" 
@@ -1415,6 +1465,25 @@
                   清空
                 </button>
               </div>
+            </div>
+
+            <!-- Manual Editable Input Field for Output -->
+            <div class="relative flex items-center mb-2">
+              <input 
+                type="text" 
+                class="input-field font-mono text-sm pr-10" 
+                placeholder="例如: ctrl+w 或 win+d (支持手动输入/修改代码，用 + 分隔)"
+                :value="remapModal.data.output ? remapModal.data.output.join('+') : ''"
+                @input="e => onRemapOutputTextInput(e.target.value)"
+              />
+              <button 
+                type="button" 
+                class="btn-icon absolute right-2 text-indigo-500" 
+                :title="isRecordingOutput ? '点击结束录制' : '点击开始键盘录制'"
+                @click="toggleOutputRecording"
+              >
+                <Keyboard class="w-4 h-4" />
+              </button>
             </div>
 
             <!-- Output Recording Pad (Keyboard) -->
@@ -1434,15 +1503,16 @@
                   </span>
                 </template>
                 <span v-if="isRecordingOutput" class="text-xs text-indigo-500 font-medium ml-2">
-                  (正在录制，可直接再次按下以覆盖)
+                  (录制中：可随时再次按下以覆盖重录，完成后点击上方“结束录制”)
                 </span>
               </div>
               <div v-else-if="isRecordingOutput" class="text-xs text-indigo-500 font-medium flex items-center gap-2">
                 <span class="recording-dot"></span>
                 <span>请在键盘上按下目标组合键（例如按住 Ctrl + W）...</span>
               </div>
-              <div v-else class="text-xs text-muted">
-                点击此处或“点击录制输出键”，然后直接按下目标键盘组合键
+              <div v-else class="text-xs text-muted flex items-center gap-2">
+                <Keyboard class="w-3.5 h-3.5 text-indigo-400" />
+                <span>点击“点击录制输出键”直接按下组合键，或在上方输入框直接打字输入</span>
               </div>
             </div>
 
@@ -1476,7 +1546,7 @@
         </div>
 
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="remapModal.show = false">取消</button>
+          <button class="btn btn-secondary" @click="closeRemapModal">取消</button>
           <button class="btn btn-primary" @click="saveRemapModal">保存映射</button>
         </div>
       </div>
@@ -1707,17 +1777,46 @@ const hotkeyModal = ref({
 const isRecordingHotkey = ref(false)
 const isHotkeyBoxFocused = ref(false)
 
-const toggleHotkeyRecording = () => {
+const toggleHotkeyRecording = async () => {
   isRecordingHotkey.value = !isRecordingHotkey.value
+  try {
+    await invoke('set_recording_state', { active: isRecordingHotkey.value })
+  } catch (e) {
+    console.error('set_recording_state error:', e)
+  }
 }
 
-const onHotkeyBoxFocus = () => {
+const onHotkeyBoxFocus = async () => {
   isHotkeyBoxFocused.value = true
-  isRecordingHotkey.value = true
+  if (!isRecordingHotkey.value) {
+    isRecordingHotkey.value = true
+    try {
+      await invoke('set_recording_state', { active: true })
+    } catch (e) {}
+  }
 }
 
 const onHotkeyBoxBlur = () => {
   isHotkeyBoxFocused.value = false
+}
+
+const onHotkeyInputFocus = async () => {
+  if (isRecordingHotkey.value) {
+    isRecordingHotkey.value = false
+    try {
+      await invoke('set_recording_state', { active: false })
+    } catch (e) {}
+  }
+}
+
+const closeHotkeyModal = async () => {
+  if (isRecordingHotkey.value) {
+    isRecordingHotkey.value = false
+    try {
+      await invoke('set_recording_state', { active: false })
+    } catch (e) {}
+  }
+  hotkeyModal.value.show = false
 }
 
 const onHotkeyRecordKeyDown = (e) => {
@@ -1756,8 +1855,7 @@ const onHotkeyRecordKeyDown = (e) => {
 
   if (all.length > 0) {
     hotkeyModal.value.data.hotkey = all.join('+')
-    isRecordingHotkey.value = false
-    showToast(`已录制快捷键: ${hotkeyModal.value.data.hotkey}`, 'success')
+    showToast(`已捕获按键: ${hotkeyModal.value.data.hotkey} (可继续按下重录，完成后点击“结束录制”)`, 'success')
   }
 }
 
@@ -1790,8 +1888,9 @@ const onBrowserPresetChange = () => {
   }
 }
 
-const onTargetTypeChange = () => {
-  if (hotkeyModal.value.data.target_type === 'browser_tab') {
+const onTargetTypeChange = (val) => {
+  hotkeyModal.value.data.target_type = val
+  if (val === 'browser_tab') {
     updateBrowserPresetSelectionFromData()
   }
 }
@@ -1806,7 +1905,7 @@ const openAddHotkeyModal = () => {
     data: {
       app: '',
       name: '',
-      hotkey: 'CTRL+ALT+W',
+      hotkey: '',
       enabled: true,
       launch_if_not_running: true,
       install_path: '',
@@ -1831,6 +1930,9 @@ const editHotkey = (entry, index) => {
   } else if (!data._runtime_profile.hide_behavior) {
     data._runtime_profile.hide_behavior = 'minimize'
   }
+  if (!data.target_type || data.target_type === 'builtin') {
+    data.target_type = 'win32'
+  }
   hotkeyModal.value = {
     show: true,
     isEdit: true,
@@ -1845,10 +1947,21 @@ const applyHotkeyPreset = (preset) => {
     hotkeyModal.value.data._runtime_profile = {}
   }
   switch (preset) {
+    case 'bindx':
+      hotkeyModal.value.data.app = 'bindx'
+      hotkeyModal.value.data.name = 'BindX'
+      hotkeyModal.value.data.target_type = 'win32'
+      hotkeyModal.value.data.exe_name = 'bindx.exe'
+      hotkeyModal.value.data.install_path = ''
+      hotkeyModal.value.data.launch_if_not_running = false
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      updateBrowserPresetSelectionFromData()
+      showToast('已载入 BindX 自身窗口预设，请录制或输入专属唤起快捷键', 'info')
+      break
     case 'cloudmusic':
       hotkeyModal.value.data.app = 'cloudmusic'
       hotkeyModal.value.data.name = '网易云音乐'
-      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.target_type = 'win32'
       hotkeyModal.value.data.exe_name = 'cloudmusic.exe'
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'tray'
       hotkeyModal.value.data.launch_if_not_running = true
@@ -1856,7 +1969,7 @@ const applyHotkeyPreset = (preset) => {
     case 'wechat':
       hotkeyModal.value.data.app = 'wechat'
       hotkeyModal.value.data.name = '微信'
-      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.target_type = 'win32'
       hotkeyModal.value.data.exe_name = 'WeChat.exe'
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'tray'
       hotkeyModal.value.data.launch_if_not_running = true
@@ -1864,7 +1977,7 @@ const applyHotkeyPreset = (preset) => {
     case 'termius':
       hotkeyModal.value.data.app = 'termius'
       hotkeyModal.value.data.name = 'Termius'
-      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.target_type = 'win32'
       hotkeyModal.value.data.exe_name = 'Termius.exe'
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
       hotkeyModal.value.data.launch_if_not_running = true
@@ -1872,7 +1985,7 @@ const applyHotkeyPreset = (preset) => {
     case 'zotero':
       hotkeyModal.value.data.app = 'zotero'
       hotkeyModal.value.data.name = 'Zotero'
-      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.target_type = 'win32'
       hotkeyModal.value.data.exe_name = 'zotero.exe'
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
       hotkeyModal.value.data.launch_if_not_running = true
@@ -1880,7 +1993,7 @@ const applyHotkeyPreset = (preset) => {
     case 'vscode':
       hotkeyModal.value.data.app = 'vscode'
       hotkeyModal.value.data.name = 'Visual Studio Code'
-      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.target_type = 'win32'
       hotkeyModal.value.data.exe_name = 'Code.exe'
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
       hotkeyModal.value.data.launch_if_not_running = true
@@ -1888,7 +2001,7 @@ const applyHotkeyPreset = (preset) => {
     case 'terminal':
       hotkeyModal.value.data.app = 'terminal'
       hotkeyModal.value.data.name = 'Windows Terminal'
-      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.target_type = 'win32'
       hotkeyModal.value.data.exe_name = 'wt.exe'
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
       hotkeyModal.value.data.launch_if_not_running = true
@@ -1935,11 +2048,23 @@ const pickExecutableFile = async () => {
   }
 }
 
-const saveHotkeyModal = () => {
-  if (!hotkeyModal.value.data.hotkey.trim()) {
-    showToast('快捷键组合不能为空', 'danger')
+const saveHotkeyModal = async () => {
+  if (isRecordingHotkey.value) {
+    isRecordingHotkey.value = false
+    try {
+      await invoke('set_recording_state', { active: false })
+    } catch (e) {}
+  }
+  if (!hotkeyModal.value.data.hotkey || !hotkeyModal.value.data.hotkey.trim()) {
+    showToast('快捷键组合不能为空，请录制或输入快捷键', 'danger')
     return
   }
+  hotkeyModal.value.data.hotkey = hotkeyModal.value.data.hotkey
+    .split('+')
+    .map(k => k.trim().toUpperCase())
+    .filter(Boolean)
+    .join('+')
+
   if (!hotkeyModal.value.data.name?.trim()) {
     if (hotkeyModal.value.data.target_type === 'browser_tab' && hotkeyModal.value.data.title_keyword) {
       hotkeyModal.value.data.name = `网页: ${hotkeyModal.value.data.title_keyword}`
@@ -1994,34 +2119,77 @@ const isTriggerBoxFocused = ref(false)
 const isRecordingOutput = ref(false)
 const isOutputBoxFocused = ref(false)
 
-const toggleTriggerRecording = () => {
-  isRecordingTrigger.value = !isRecordingTrigger.value
-  isRecordingOutput.value = false
+const closeRemapModal = async () => {
+  if (isRecordingTrigger.value || isRecordingOutput.value) {
+    isRecordingTrigger.value = false
+    isRecordingOutput.value = false
+    try {
+      await invoke('set_recording_state', { active: false })
+    } catch (e) {}
+  }
+  remapModal.value.show = false
 }
 
-const onTriggerBoxFocus = () => {
-  isTriggerBoxFocused.value = true
-  isRecordingTrigger.value = true
+const toggleTriggerRecording = async () => {
+  isRecordingTrigger.value = !isRecordingTrigger.value
   isRecordingOutput.value = false
+  try {
+    await invoke('set_recording_state', { active: isRecordingTrigger.value })
+  } catch (e) {}
+}
+
+const onTriggerBoxFocus = async () => {
+  isTriggerBoxFocused.value = true
+  if (!isRecordingTrigger.value) {
+    isRecordingTrigger.value = true
+    isRecordingOutput.value = false
+    try {
+      await invoke('set_recording_state', { active: true })
+    } catch (e) {}
+  }
 }
 
 const onTriggerBoxBlur = () => {
   isTriggerBoxFocused.value = false
 }
 
-const toggleOutputRecording = () => {
+const toggleOutputRecording = async () => {
   isRecordingOutput.value = !isRecordingOutput.value
   isRecordingTrigger.value = false
+  try {
+    await invoke('set_recording_state', { active: isRecordingOutput.value })
+  } catch (e) {}
 }
 
-const onOutputBoxFocus = () => {
+const onOutputBoxFocus = async () => {
   isOutputBoxFocused.value = true
-  isRecordingOutput.value = true
-  isRecordingTrigger.value = false
+  if (!isRecordingOutput.value) {
+    isRecordingOutput.value = true
+    isRecordingTrigger.value = false
+    try {
+      await invoke('set_recording_state', { active: true })
+    } catch (e) {}
+  }
 }
 
 const onOutputBoxBlur = () => {
   isOutputBoxFocused.value = false
+}
+
+const onRemapTriggerTextInput = (val) => {
+  if (!val.trim()) {
+    remapModal.value.data.trigger = []
+    return
+  }
+  remapModal.value.data.trigger = val.split('+').map(s => s.trim().toLowerCase()).filter(Boolean)
+}
+
+const onRemapOutputTextInput = (val) => {
+  if (!val.trim()) {
+    remapModal.value.data.output = []
+    return
+  }
+  remapModal.value.data.output = val.split('+').map(s => s.trim().toLowerCase()).filter(Boolean)
 }
 
 const onTriggerRecordKeyDown = (e) => {
@@ -2051,11 +2219,10 @@ const onTriggerRecordKeyDown = (e) => {
     all.push(key)
   }
   remapModal.value.data.trigger = all
-  isRecordingTrigger.value = false
   if (!remapModal.value.data.description || remapModal.value.data.description === '鼠标侧键操作') {
     remapModal.value.data.description = describeKeys(all)
   }
-  showToast(`已录制触发按键: ${all.map(formatKeyLabel).join('+')}`, 'success')
+  showToast(`已捕获触发按键: ${all.map(formatKeyLabel).join('+')} (可继续按下重录)`, 'success')
 }
 
 const onTriggerRecordPointerDown = (e) => {
@@ -2082,11 +2249,10 @@ const onTriggerRecordPointerDown = (e) => {
     all.push(mouseKey)
   }
   remapModal.value.data.trigger = all
-  isRecordingTrigger.value = false
   if (!remapModal.value.data.description || remapModal.value.data.description === '鼠标侧键操作') {
     remapModal.value.data.description = describeKeys(all)
   }
-  showToast(`已录制触发按键: ${all.map(formatKeyLabel).join('+')}`, 'success')
+  showToast(`已捕获触发按键: ${all.map(formatKeyLabel).join('+')} (可继续按下重录)`, 'success')
 }
 
 const onOutputRecordKeyDown = (e) => {
@@ -2116,8 +2282,7 @@ const onOutputRecordKeyDown = (e) => {
     all.push(key)
   }
   remapModal.value.data.output = all
-  isRecordingOutput.value = false
-  showToast(`已录制输出按键: ${all.map(formatKeyLabel).join('+')}`, 'success')
+  showToast(`已捕获输出按键: ${all.map(formatKeyLabel).join('+')} (可继续按下重录)`, 'success')
 }
 
 const openAddRemapModal = (initialData = null) => {
@@ -2157,12 +2322,19 @@ const insertTriggerKey = (k) => {
   }
 }
 
-const saveRemapModal = () => {
-  if (remapModal.value.data.trigger.length === 0) {
+const saveRemapModal = async () => {
+  if (isRecordingTrigger.value || isRecordingOutput.value) {
+    isRecordingTrigger.value = false
+    isRecordingOutput.value = false
+    try {
+      await invoke('set_recording_state', { active: false })
+    } catch (e) {}
+  }
+  if (!remapModal.value.data.trigger || remapModal.value.data.trigger.length === 0) {
     showToast('触发按键不能为空', 'danger')
     return
   }
-  if (remapModal.value.data.output.length === 0) {
+  if (!remapModal.value.data.output || remapModal.value.data.output.length === 0) {
     showToast('输出按键不能为空', 'danger')
     return
   }
@@ -3426,6 +3598,17 @@ onMounted(() => {
   background: rgba(99, 102, 241, 0.22);
   border-color: #818cf8;
   color: #38bdf8;
+}
+.preset-chip-primary {
+  background: rgba(99, 102, 241, 0.12) !important;
+  color: #4f46e5 !important;
+  border-color: rgba(99, 102, 241, 0.35) !important;
+  font-weight: 600 !important;
+}
+[data-theme="slate"] .preset-chip-primary {
+  background: rgba(99, 102, 241, 0.22) !important;
+  color: #818cf8 !important;
+  border-color: rgba(99, 102, 241, 0.5) !important;
 }
 .preset-star {
   color: #eab308;

@@ -1,14 +1,14 @@
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager,
 };
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-    let sep1 = MenuItem::with_id(app, "sep1", "---", false, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
     let check_update_item = MenuItem::with_id(app, "check_update", "检查更新...", true, None::<&str>)?;
-    let sep2 = MenuItem::with_id(app, "sep2", "---", false, None::<&str>)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出 BindX", true, None::<&str>)?;
 
     let menu = Menu::with_items(app, &[

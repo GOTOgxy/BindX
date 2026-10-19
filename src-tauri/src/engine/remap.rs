@@ -15,6 +15,7 @@ static mut MOUSE_HOOK: HHOOK = HHOOK(std::ptr::null_mut());
 static mut KBD_HOOK: HHOOK = HHOOK(std::ptr::null_mut());
 static mut ACTIVE_MOUSE_RULES: Option<Vec<MouseMapping>> = None;
 static mut ACTIVE_KEY_RULES: Option<Vec<KeyMapping>> = None;
+static RECORDING_PAUSED: AtomicBool = AtomicBool::new(false);
 
 pub struct RemapEngine {
     thread_id: Arc<AtomicU32>,
@@ -127,9 +128,17 @@ impl RemapEngine {
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
+
+    pub fn set_recording_paused(&self, paused: bool) {
+        RECORDING_PAUSED.store(paused, Ordering::SeqCst);
+    }
 }
 
 unsafe extern "system" fn mouse_hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+    if RECORDING_PAUSED.load(Ordering::SeqCst) {
+        return CallNextHookEx(MOUSE_HOOK, n_code, w_param, l_param);
+    }
+
     if n_code >= 0 && (w_param.0 as u32) == WM_XBUTTONDOWN {
         let info = &*(l_param.0 as *const MSLLHOOKSTRUCT);
         if info.dwExtraInfo == BINDX_EXTRA_INFO {
@@ -215,6 +224,10 @@ unsafe extern "system" fn mouse_hook_proc(n_code: i32, w_param: WPARAM, l_param:
 }
 
 unsafe extern "system" fn kbd_hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+    if RECORDING_PAUSED.load(Ordering::SeqCst) {
+        return CallNextHookEx(KBD_HOOK, n_code, w_param, l_param);
+    }
+
     if n_code >= 0 && (w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN) {
         let info = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
         if info.dwExtraInfo == BINDX_EXTRA_INFO {
