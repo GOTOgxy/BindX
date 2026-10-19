@@ -144,6 +144,59 @@ unsafe extern "system" fn mouse_hook_proc(n_code: i32, w_param: WPARAM, l_param:
         };
 
         if !btn_str.is_empty() {
+            // 1. Check unified ACTIVE_KEY_RULES first
+            if let Some(ref rules) = ACTIVE_KEY_RULES {
+                for rule in rules {
+                    if !rule.enabled || rule.trigger.is_empty() {
+                        continue;
+                    }
+
+                    // Check if this rule's trigger contains this mouse button
+                    let has_button = rule.trigger.iter().any(|k| {
+                        let l = k.trim().to_lowercase();
+                        l == btn_str
+                            || (btn_str == "x1" && (l == "xbutton1" || l == "mouse4" || l == "后退键" || l == "侧键1"))
+                            || (btn_str == "x2" && (l == "xbutton2" || l == "mouse5" || l == "前进键" || l == "侧键2"))
+                    });
+
+                    if !has_button {
+                        continue;
+                    }
+
+                    // Check all other keys in the trigger combination
+                    let mut all_match = true;
+                    for trigger_key in &rule.trigger {
+                        let l = trigger_key.trim().to_lowercase();
+                        let is_this_btn = l == btn_str
+                            || (btn_str == "x1" && (l == "xbutton1" || l == "mouse4" || l == "后退键" || l == "侧键1"))
+                            || (btn_str == "x2" && (l == "xbutton2" || l == "mouse5" || l == "前进键" || l == "侧键2"));
+                        if is_this_btn {
+                            continue;
+                        }
+
+                        if let Some(vk) = get_vk_code(trigger_key) {
+                            let is_down = (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0;
+                            if !is_down {
+                                all_match = false;
+                                break;
+                            }
+                        } else {
+                            all_match = false;
+                            break;
+                        }
+                    }
+
+                    if all_match {
+                        let out_keys = rule.output.clone();
+                        thread::spawn(move || {
+                            send_key_sequence(&out_keys);
+                        });
+                        return LRESULT(1); // Intercept event!
+                    }
+                }
+            }
+
+            // 2. Legacy fallback
             if let Some(ref rules) = ACTIVE_MOUSE_RULES {
                 for rule in rules {
                     if rule.enabled && rule.button.eq_ignore_ascii_case(btn_str) {
@@ -176,9 +229,12 @@ unsafe extern "system" fn kbd_hook_proc(n_code: i32, w_param: WPARAM, l_param: L
 
                 // Check if all trigger keys are currently pressed
                 let mut all_match = true;
+                let mut contains_current_key = false;
+
                 for trigger_key in &rule.trigger {
                     if let Some(vk) = get_vk_code(trigger_key) {
                         let is_down = if vk.0 == info.vkCode as u16 {
+                            contains_current_key = true;
                             true
                         } else {
                             (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0
@@ -194,7 +250,7 @@ unsafe extern "system" fn kbd_hook_proc(n_code: i32, w_param: WPARAM, l_param: L
                     }
                 }
 
-                if all_match {
+                if all_match && contains_current_key {
                     let out_keys = rule.output.clone();
                     thread::spawn(move || {
                         send_key_sequence(&out_keys);

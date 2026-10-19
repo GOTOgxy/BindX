@@ -148,7 +148,7 @@ pub struct WebDavConfig {
 }
 
 fn default_remote_filename() -> String {
-    "bindx/bindx_config.json".to_string()
+    "bindx".to_string()
 }
 
 impl Default for WebDavConfig {
@@ -229,7 +229,27 @@ pub fn get_config_path() -> PathBuf {
 pub fn load_config() -> BindxConfig {
     let path = get_config_path();
     if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(cfg) = serde_json::from_str::<BindxConfig>(&content) {
+        if let Ok(mut cfg) = serde_json::from_str::<BindxConfig>(&content) {
+            // Migrate legacy mouse_mappings into unified mappings
+            if !cfg.mouse.mouse_mappings.is_empty() {
+                for mm in cfg.mouse.mouse_mappings.drain(..) {
+                    let exists = cfg.mouse.mappings.iter().any(|m| m.trigger == vec![mm.button.clone()]);
+                    if !exists {
+                        cfg.mouse.mappings.push(KeyMapping {
+                            trigger: vec![mm.button],
+                            output: mm.output,
+                            description: mm.description,
+                            enabled: mm.enabled,
+                        });
+                    }
+                }
+            }
+
+            // Normalize legacy remote_filename
+            if cfg.webdav.remote_filename == "bindx/bindx_config.json" {
+                cfg.webdav.remote_filename = "bindx".to_string();
+            }
+
             return cfg;
         }
     }

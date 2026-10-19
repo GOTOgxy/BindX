@@ -15,14 +15,35 @@ impl WebDavClient {
         Self { client }
     }
 
+    pub const FIXED_CONFIG_FILENAME: &'static str = "bindx_config.json";
+    pub const DEFAULT_SUBDIR: &'static str = "bindx";
+
+    pub fn resolve_remote_dir(raw: &str) -> String {
+        let trimmed = raw.trim().trim_matches('/');
+        if trimmed.is_empty() {
+            return Self::DEFAULT_SUBDIR.to_string();
+        }
+        if trimmed.ends_with(Self::FIXED_CONFIG_FILENAME) {
+            let without = trimmed[..trimmed.len() - Self::FIXED_CONFIG_FILENAME.len()].trim_matches('/');
+            if without.is_empty() {
+                return Self::DEFAULT_SUBDIR.to_string();
+            }
+            return without.to_string();
+        }
+        trimmed.to_string()
+    }
+
     fn build_remote_url(cfg: &WebDavConfig) -> Result<String, String> {
         let base = cfg.server_url.trim().trim_end_matches('/');
         if base.is_empty() {
             return Err("WebDAV 服务器地址不能为空".to_string());
         }
-        let file = cfg.remote_filename.trim().trim_start_matches('/');
-        let file = if file.is_empty() { "bindx_config.json" } else { file };
-        Ok(format!("{}/{}", base, file))
+        let dir = Self::resolve_remote_dir(&cfg.remote_filename);
+        if dir.is_empty() || dir == "." {
+            Ok(format!("{}/{}", base, Self::FIXED_CONFIG_FILENAME))
+        } else {
+            Ok(format!("{}/{}/{}", base, dir, Self::FIXED_CONFIG_FILENAME))
+        }
     }
 
     pub async fn test_connection(&self, cfg: &WebDavConfig) -> Result<String, String> {
@@ -74,22 +95,23 @@ impl WebDavClient {
 
     async fn ensure_parent_dirs(&self, cfg: &WebDavConfig) -> Result<(), String> {
         let base = cfg.server_url.trim().trim_end_matches('/');
-        let path = cfg.remote_filename.trim().trim_start_matches('/');
-        let parts: Vec<&str> = path.split('/').collect();
-        if parts.len() > 1 {
-            let mut current_dir = String::new();
-            for part in &parts[..parts.len() - 1] {
-                if !current_dir.is_empty() {
-                    current_dir.push('/');
-                }
-                current_dir.push_str(part);
-                let dir_url = format!("{}/{}/", base, current_dir);
-                let mut req = self.client.request(Method::from_bytes(b"MKCOL").unwrap(), &dir_url);
-                if !cfg.username.is_empty() {
-                    req = req.basic_auth(&cfg.username, Some(&cfg.password));
-                }
-                let _ = req.send().await;
+        let dir = Self::resolve_remote_dir(&cfg.remote_filename);
+        if dir.is_empty() || dir == "." {
+            return Ok(());
+        }
+        let parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+        let mut current_dir = String::new();
+        for part in parts {
+            if !current_dir.is_empty() {
+                current_dir.push('/');
             }
+            current_dir.push_str(part);
+            let dir_url = format!("{}/{}/", base, current_dir);
+            let mut req = self.client.request(Method::from_bytes(b"MKCOL").unwrap(), &dir_url);
+            if !cfg.username.is_empty() {
+                req = req.basic_auth(&cfg.username, Some(&cfg.password));
+            }
+            let _ = req.send().await;
         }
         Ok(())
     }

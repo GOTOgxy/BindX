@@ -51,6 +51,9 @@ pub fn get_vk_code(key: &str) -> Option<VIRTUAL_KEY> {
         "f10" => Some(VK_F10),
         "f11" => Some(VK_F11),
         "f12" => Some(VK_F12),
+        "x1" | "xbutton1" | "mouse4" | "后退键" | "侧键1" => Some(VIRTUAL_KEY(0x05)),
+        "x2" | "xbutton2" | "mouse5" | "前进键" | "侧键2" => Some(VIRTUAL_KEY(0x06)),
+        "mbutton" | "mouse3" | "中键" => Some(VIRTUAL_KEY(0x04)),
         k if k.len() == 1 => {
             let ch = k.chars().next()?.to_ascii_uppercase();
             if ch.is_ascii_alphanumeric() {

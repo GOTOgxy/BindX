@@ -153,10 +153,10 @@
                 <MousePointer class="w-5 h-5 text-pink-500" />
               </div>
               <div class="kpi-info">
-                <span class="kpi-label">按键与侧键映射</span>
+                <span class="kpi-label">按键映射</span>
                 <div class="kpi-value-row">
-                  <span class="kpi-value">{{ config.mouse.mouse_mappings.length + config.mouse.mappings.length }}</span>
-                  <span class="kpi-unit">项</span>
+                  <span class="kpi-value">{{ config.mouse.mappings.length }}</span>
+                  <span class="kpi-unit">条规则</span>
                 </div>
               </div>
             </div>
@@ -224,8 +224,8 @@
                     <MousePointer class="w-5 h-5 text-white" />
                   </div>
                   <div>
-                    <h3>输入映射</h3>
-                    <p>鼠标侧键与键盘组合键分派</p>
+                    <h3>按键映射服务</h3>
+                    <p>鼠标侧键与键盘组合键统一分派</p>
                   </div>
                 </div>
                 <label class="toggle-switch">
@@ -236,12 +236,14 @@
 
               <div class="card-body">
                 <div class="stat-row">
-                  <span class="stat-name">鼠标侧键</span>
-                  <span class="stat-value">{{ config.mouse.mouse_mappings.length }} 项</span>
+                  <span class="stat-name">已配置规则</span>
+                  <span class="stat-value">{{ config.mouse.mappings.length }} 项</span>
                 </div>
                 <div class="stat-row">
-                  <span class="stat-name">组合键映射</span>
-                  <span class="stat-value">{{ config.mouse.mappings.length }} 项</span>
+                  <span class="stat-name">状态</span>
+                  <span class="status-tag" :class="config.app.mouse_running ? 'online' : 'offline'">
+                    {{ config.app.mouse_running ? '运行中' : '已暂停' }}
+                  </span>
                 </div>
               </div>
 
@@ -396,107 +398,117 @@
             </div>
           </div>
 
-          <!-- Section 1: Mouse Side Buttons Card -->
-          <div class="glass-panel remap-section-card">
-            <div class="section-card-header">
+          <!-- Key Detector & Tester Card -->
+          <div class="glass-panel detector-card">
+            <div class="detector-header">
               <div class="card-icon-title">
-                <div class="section-icon-wrap mouse-wrap">
-                  <MousePointer class="w-5 h-5 text-pink-500" />
+                <div class="section-icon-wrap detector-wrap">
+                  <Radio class="w-5 h-5 text-indigo-500" />
                 </div>
                 <div>
-                  <h3 class="section-title">鼠标侧键</h3>
-                  <p class="section-desc">将鼠标侧键映射为指定快捷键操作</p>
+                  <h3 class="section-title">按键检测</h3>
+                  <p class="section-desc">点击下方测试框并按下键盘或鼠标侧键，实时识别按键输入</p>
                 </div>
               </div>
-              <div class="engine-badge-pill" :class="{ active: config.app.mouse_running }">
-                <span class="dot"></span>
-                <span>侧键监听: {{ config.app.mouse_running ? '运行中' : '已暂停' }}</span>
+              <div class="detector-actions">
+                <button v-if="detectedKeys.length > 0" class="btn btn-secondary text-xs" @click="clearDetectedKeys">
+                  清空
+                </button>
+                <button 
+                  v-if="detectedKeys.length > 0" 
+                  class="btn btn-primary text-xs" 
+                  @click="createMappingFromDetected"
+                >
+                  + 以此按键创建映射
+                </button>
               </div>
             </div>
 
-            <div class="mouse-cards-grid">
-              <div 
-                v-for="(m, idx) in config.mouse.mouse_mappings" 
-                :key="idx" 
-                class="mouse-tile-card"
-              >
-                <div class="mouse-tile-top">
-                  <div class="mouse-badge-group">
-                    <span class="keycap mouse-keycap">{{ m.button.toUpperCase() }}</span>
-                    <div>
-                      <span class="mouse-btn-name">{{ m.button.toUpperCase() === 'X1' ? '后退键' : '前进键' }}</span>
-                      <span class="mouse-btn-desc">{{ m.description || (m.button.toUpperCase() === 'X1' ? '关闭标签页' : '前进') }}</span>
-                    </div>
-                  </div>
-                  <label class="toggle-switch">
-                    <input type="checkbox" v-model="m.enabled" @change="saveAll" />
-                    <span class="slider"></span>
-                  </label>
+            <div 
+              class="detector-pad" 
+              :class="{ active: isDetectingPadFocused }"
+              tabindex="0"
+              @focus="isDetectingPadFocused = true"
+              @blur="isDetectingPadFocused = false"
+              @keydown="onDetectorKeyDown"
+              @pointerdown="onDetectorPointerDown"
+              @contextmenu.prevent
+            >
+              <div v-if="detectedKeys.length > 0" class="detected-keys-display">
+                <div class="flex gap-2 items-center flex-wrap justify-center">
+                  <template v-for="(k, idx) in detectedKeys" :key="idx">
+                    <span v-if="idx > 0" class="detector-plus">+</span>
+                    <span 
+                      class="keycap detector-keycap"
+                      :class="{ mouse: isMouseKey(k) }"
+                    >
+                      {{ formatKeyLabel(k) }}
+                    </span>
+                  </template>
                 </div>
+                <div class="detected-sub-info">
+                  <span class="detector-tag">{{ getDetectedKeyDescription(detectedKeys) }}</span>
+                  <span class="font-mono text-xs text-muted">标准代码: {{ detectedKeys.join(' ') }}</span>
+                </div>
+              </div>
+              <div v-else class="detector-idle">
+                <MousePointer class="w-6 h-6 text-indigo-400 opacity-60 mb-1" />
+                <span class="detector-hint-title">点击此处激活按键捕获</span>
+                <span class="detector-hint-sub">支持键盘常规按键、修饰键以及鼠标侧键（后退 X1 / 前进 X2 / 滚轮中键）</span>
+              </div>
+            </div>
 
-                <div class="mouse-mapping-flow">
-                  <div class="flow-step">
-                    <span class="flow-label">触发键</span>
-                    <span class="keycap">{{ m.button.toUpperCase() }}</span>
-                  </div>
-                  <div class="flow-arrow">
-                    <ArrowRight class="w-4 h-4 text-slate-400" />
-                  </div>
-                  <div class="flow-step">
-                    <span class="flow-label">输出键</span>
-                    <div class="flex gap-1.5 flex-wrap">
-                      <span v-for="k in m.output" :key="k" class="keycap accent">{{ k.toUpperCase() }}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="mouse-input-row">
-                  <input 
-                    type="text" 
-                    class="input-field mouse-input" 
-                    placeholder="例如 ctrl w"
-                    :value="m.output.join(' ')"
-                    @change="e => updateMouseOutput(m, e.target.value)"
-                  />
-                </div>
-
-                <!-- Quick Presets -->
-                <div class="quick-presets">
-                  <span class="preset-hint">常用预设：</span>
-                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['ctrl', 'w'])">关闭标签 (Ctrl+W)</button>
-                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['ctrl', 't'])">新建标签 (Ctrl+T)</button>
-                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['alt', 'left'])">后退 (Alt+Left)</button>
-                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['win', 'd'])">显示桌面 (Win+D)</button>
-                </div>
+            <!-- Presets row -->
+            <div class="detector-presets">
+              <span class="preset-label">常用快捷预设：</span>
+              <div class="preset-chips">
+                <button type="button" class="preset-chip" @click="addQuickPreset(['x1'], ['ctrl', 'w'], '鼠标后退键关闭标签')">
+                  + 鼠标后退 (X1) → 关闭标签 (Ctrl+W)
+                </button>
+                <button type="button" class="preset-chip" @click="addQuickPreset(['x2'], ['ctrl', 't'], '鼠标前进键新建标签')">
+                  + 鼠标前进 (X2) → 新建标签 (Ctrl+T)
+                </button>
+                <button type="button" class="preset-chip" @click="addQuickPreset(['x1'], ['alt', 'left'], '鼠标后退键网页后退')">
+                  + 鼠标后退 (X1) → 网页后退 (Alt+Left)
+                </button>
+                <button type="button" class="preset-chip" @click="addQuickPreset(['mbutton'], ['win', 'd'], '滚轮中键显示桌面')">
+                  + 滚轮中键 → 显示桌面 (Win+D)
+                </button>
               </div>
             </div>
           </div>
 
-          <!-- Section 2: Keyboard Macro Remap Card -->
-          <div class="glass-panel remap-section-card mt-6">
+          <!-- Unified Key Mapping Table Card -->
+          <div class="glass-panel remap-section-card mt-5">
             <div class="section-card-header">
               <div class="card-icon-title">
                 <div class="section-icon-wrap key-wrap">
-                  <Keyboard class="w-5 h-5 text-indigo-500" />
+                  <Layers class="w-5 h-5 text-indigo-500" />
                 </div>
                 <div>
-                  <h3 class="section-title">组合键映射</h3>
-                  <p class="section-desc">将特定键盘组合键映射为目标按键输出</p>
+                  <h3 class="section-title">映射规则列表</h3>
+                  <p class="section-desc">已生效的鼠标侧键与键盘组合键映射</p>
                 </div>
               </div>
-              <button class="btn btn-secondary text-xs" @click="addKeyMapping">+ 添加映射</button>
+              <div class="flex items-center gap-3">
+                <div class="engine-badge-pill" :class="{ active: config.app.mouse_running }">
+                  <span class="dot"></span>
+                  <span>映射监听: {{ config.app.mouse_running ? '运行中' : '已暂停' }}</span>
+                </div>
+                <button class="btn btn-primary text-xs" @click="openAddRemapModal()">+ 添加映射</button>
+              </div>
             </div>
 
             <div class="overflow-hidden rounded-xl border border-color">
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th style="width: 80px;">状态</th>
-                    <th>触发键</th>
+                    <th style="width: 70px;">状态</th>
+                    <th style="width: 220px;">触发按键</th>
                     <th style="width: 40px; text-align: center;"></th>
-                    <th>输出键</th>
+                    <th style="width: 220px;">输出按键</th>
                     <th>描述</th>
-                    <th style="width: 90px; text-align: center;">操作</th>
+                    <th style="width: 100px; text-align: center;">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -508,30 +520,42 @@
                       </label>
                     </td>
                     <td>
-                      <div class="flex gap-1.5 items-center">
-                        <span v-for="k in km.trigger" :key="k" class="keycap">{{ k.toUpperCase() }}</span>
+                      <div class="flex gap-1.5 items-center flex-wrap">
+                        <span 
+                          v-for="k in km.trigger" 
+                          :key="k" 
+                          class="keycap"
+                          :class="{ mouse: isMouseKey(k) }"
+                        >
+                          {{ formatKeyLabel(k) }}
+                        </span>
                       </div>
                     </td>
                     <td style="text-align: center;">
                       <ArrowRight class="w-4 h-4 text-slate-400 inline-block" />
                     </td>
                     <td>
-                      <div class="flex gap-1.5 items-center">
+                      <div class="flex gap-1.5 items-center flex-wrap">
                         <span v-for="k in km.output" :key="k" class="keycap accent">{{ k.toUpperCase() }}</span>
                       </div>
                     </td>
                     <td>
-                      <span class="text-xs text-secondary font-medium">{{ km.description }}</span>
+                      <span class="text-xs text-secondary font-medium">{{ km.description || '无描述' }}</span>
                     </td>
                     <td style="text-align: center;">
-                      <button class="btn-icon danger mx-auto" title="删除映射" @click="deleteKeyMapping(idx)">
-                        <Trash2 class="w-3.5 h-3.5" />
-                      </button>
+                      <div class="flex items-center justify-center gap-1">
+                        <button class="btn-icon" title="编辑映射" @click="openEditRemapModal(km, idx)">
+                          <Edit class="w-3.5 h-3.5" />
+                        </button>
+                        <button class="btn-icon danger" title="删除映射" @click="deleteKeyMapping(idx)">
+                          <Trash2 class="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                   <tr v-if="config.mouse.mappings.length === 0">
-                    <td colspan="6" class="text-center py-8 text-muted text-xs">
-                      暂无组合键映射，点击右上角添加
+                    <td colspan="6" class="text-center py-10 text-muted text-xs">
+                      暂无映射规则，可使用上方的“按键检测”或“常用预设”快速创建
                     </td>
                   </tr>
                 </tbody>
@@ -631,14 +655,14 @@
                 </div>
 
                 <div class="form-item col-span-2">
-                  <label class="form-label">远程路径</label>
+                  <label class="form-label">同步目录</label>
                   <input 
                     type="text" 
                     class="input-field font-mono" 
-                    placeholder="bindx/bindx_config.json"
+                    placeholder="默认: bindx (留空自动使用默认目录)"
                     v-model="config.webdav.remote_filename" 
                   />
-                  <span class="field-hint">建议填入 <code>bindx/bindx_config.json</code>，自动创建独立文件夹</span>
+                  <span class="field-hint">仅需指定云端子目录，配置文件由软件内部自动托管</span>
                 </div>
 
                 <div class="form-item col-span-2 flex items-center justify-between pt-2">
@@ -681,14 +705,12 @@
                   </span>
                 </div>
                 <div class="sync-status-row">
-                  <span class="sync-label">远程目录:</span>
+                  <span class="sync-label">同步目录:</span>
                   <span class="font-mono text-xs text-main">{{ remoteDirectory }}</span>
                 </div>
                 <div class="sync-status-row">
-                  <span class="sync-label">完整路径:</span>
-                  <span class="font-mono text-xs text-muted truncate sync-value" :title="resolvedWebDavUrl">
-                    {{ resolvedWebDavUrl || '未配置' }}
-                  </span>
+                  <span class="sync-label">托管配置:</span>
+                  <span class="text-xs text-muted">软件内部自动托管</span>
                 </div>
               </div>
 
@@ -1120,6 +1142,81 @@
         </div>
       </div>
     </div>
+
+    <!-- Edit / Add Remap Modal -->
+    <div v-if="remapModal.show" class="modal-backdrop">
+      <div class="modal-dialog glass-panel">
+        <div class="modal-header">
+          <h3>{{ remapModal.isEdit ? '编辑按键映射' : '添加按键映射' }}</h3>
+          <button class="modal-close" @click="remapModal.show = false">×</button>
+        </div>
+
+        <div class="modal-body form-grid">
+          <div class="form-item col-span-2">
+            <label class="form-label">触发按键 (Trigger)</label>
+            <input 
+              type="text" 
+              class="input-field font-mono" 
+              placeholder="例如: x1 或 ctrl x1"
+              :value="remapModal.data.trigger.join(' ')"
+              @input="e => remapModal.data.trigger = e.target.value.toLowerCase().split(/[\s,]+/).filter(Boolean)"
+            />
+            <div class="modal-chips-row">
+              <span class="text-xs text-muted">快速插入：</span>
+              <button type="button" class="preset-tag" @click="insertTriggerKey('x1')">+ X1 侧键后退</button>
+              <button type="button" class="preset-tag" @click="insertTriggerKey('x2')">+ X2 侧键前进</button>
+              <button type="button" class="preset-tag" @click="insertTriggerKey('mbutton')">+ 滚轮中键</button>
+              <button type="button" class="preset-tag" @click="insertTriggerKey('ctrl')">+ Ctrl</button>
+              <button type="button" class="preset-tag" @click="insertTriggerKey('alt')">+ Alt</button>
+              <button type="button" class="preset-tag" @click="insertTriggerKey('shift')">+ Shift</button>
+              <button type="button" class="preset-tag" @click="insertTriggerKey('win')">+ Win</button>
+            </div>
+          </div>
+
+          <div class="form-item col-span-2">
+            <label class="form-label">输出按键 (Output)</label>
+            <input 
+              type="text" 
+              class="input-field font-mono" 
+              placeholder="例如: ctrl w 或 alt left"
+              :value="remapModal.data.output.join(' ')"
+              @input="e => remapModal.data.output = e.target.value.toLowerCase().split(/[\s,]+/).filter(Boolean)"
+            />
+            <div class="modal-chips-row">
+              <span class="text-xs text-muted">常用预设：</span>
+              <button type="button" class="preset-tag" @click="remapModal.data.output = ['ctrl', 'w']">关闭标签 (Ctrl+W)</button>
+              <button type="button" class="preset-tag" @click="remapModal.data.output = ['ctrl', 't']">新建标签 (Ctrl+T)</button>
+              <button type="button" class="preset-tag" @click="remapModal.data.output = ['alt', 'left']">后退 (Alt+Left)</button>
+              <button type="button" class="preset-tag" @click="remapModal.data.output = ['win', 'd']">显示桌面 (Win+D)</button>
+              <button type="button" class="preset-tag" @click="remapModal.data.output = ['ctrl', 's']">保存 (Ctrl+S)</button>
+            </div>
+          </div>
+
+          <div class="form-item col-span-2">
+            <label class="form-label">描述</label>
+            <input 
+              type="text" 
+              class="input-field" 
+              placeholder="例如: 鼠标后退键关闭标签页"
+              v-model="remapModal.data.description" 
+            />
+          </div>
+
+          <div class="form-item col-span-2 flex items-center justify-between pt-1">
+            <span class="font-medium text-sm text-main">启用该映射规则</span>
+            <label class="toggle-switch">
+              <input type="checkbox" v-model="remapModal.data.enabled" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="remapModal.show = false">取消</button>
+          <button class="btn btn-primary" @click="saveRemapModal">保存映射</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1157,7 +1254,9 @@ import {
   Server,
   RefreshCw,
   Upload,
-  FolderOpen
+  FolderOpen,
+  Radio,
+  Layers
 } from '@lucide/vue'
 
 const appWindow = getCurrentWindow()
@@ -1391,20 +1490,162 @@ const deleteHotkey = (index) => {
   saveAll()
 }
 
-// Mouse mappings
-const updateMouseOutput = (mapping, text) => {
-  const parts = text.split(/[\s,]+/).filter(Boolean)
-  mapping.output = parts
-  saveAll()
+// Key Detector & Unified Remap State
+const isDetectingPadFocused = ref(false)
+const detectedKeys = ref([])
+
+const remapModal = ref({
+  show: false,
+  isEdit: false,
+  index: -1,
+  data: {
+    trigger: [],
+    output: [],
+    description: '',
+    enabled: true
+  }
+})
+
+const isMouseKey = (k) => ['x1', 'x2', 'mbutton', 'xbutton1', 'xbutton2'].includes((k || '').toLowerCase())
+const isModifierKey = (k) => ['ctrl', 'alt', 'shift', 'win'].includes((k || '').toLowerCase())
+
+const formatKeyLabel = (k) => {
+  const lower = (k || '').toLowerCase()
+  if (lower === 'x1' || lower === 'xbutton1') return 'X1 (侧键后退)'
+  if (lower === 'x2' || lower === 'xbutton2') return 'X2 (侧键前进)'
+  if (lower === 'mbutton') return '滚轮中键'
+  if (lower === 'ctrl') return 'Ctrl'
+  if (lower === 'alt') return 'Alt'
+  if (lower === 'shift') return 'Shift'
+  if (lower === 'win') return 'Win'
+  return lower.toUpperCase()
 }
 
-const addKeyMapping = () => {
-  config.value.mouse.mappings.push({
-    trigger: ['ctrl', 'p'],
-    output: ['ctrl', 'alt', 'w'],
-    description: '组合键映射',
+const getDetectedKeyDescription = (keys) => {
+  if (!keys || keys.length === 0) return ''
+  const hasMouse = keys.some(isMouseKey)
+  const hasMod = keys.some(isModifierKey)
+  if (hasMouse && hasMod) return '键盘组合键 + 鼠标侧键'
+  if (hasMouse) return '鼠标按键'
+  if (hasMod && keys.length > 1) return '键盘组合按键'
+  return '单键触发'
+}
+
+const onDetectorPointerDown = (e) => {
+  if (e.button === 3 || e.button === 4) {
+    e.preventDefault()
+  }
+  
+  let keyName = ''
+  if (e.button === 3) keyName = 'x1'
+  else if (e.button === 4) keyName = 'x2'
+  else if (e.button === 1) keyName = 'mbutton'
+  else return
+  
+  const current = []
+  if (e.ctrlKey) current.push('ctrl')
+  if (e.altKey) current.push('alt')
+  if (e.shiftKey) current.push('shift')
+  if (e.metaKey) current.push('win')
+  if (!current.includes(keyName)) {
+    current.push(keyName)
+  }
+  detectedKeys.value = current
+}
+
+const onDetectorKeyDown = (e) => {
+  e.preventDefault()
+  e.stopPropagation()
+  
+  const current = []
+  if (e.ctrlKey) current.push('ctrl')
+  if (e.altKey) current.push('alt')
+  if (e.shiftKey) current.push('shift')
+  if (e.metaKey) current.push('win')
+  
+  let key = e.key.toLowerCase()
+  if (['control', 'alt', 'shift', 'meta'].includes(key)) {
+    detectedKeys.value = current
+    return
+  }
+  
+  if (key === ' ') key = 'space'
+  else if (key === 'escape') key = 'esc'
+  else if (key === 'arrowup') key = 'up'
+  else if (key === 'arrowdown') key = 'down'
+  else if (key === 'arrowleft') key = 'left'
+  else if (key === 'arrowright') key = 'right'
+  
+  if (!current.includes(key)) {
+    current.push(key)
+  }
+  detectedKeys.value = current
+}
+
+const clearDetectedKeys = () => {
+  detectedKeys.value = []
+}
+
+const describeKeys = (keys) => {
+  const parts = keys.map(k => formatKeyLabel(k))
+  return `${parts.join('+')} 映射`
+}
+
+const createMappingFromDetected = () => {
+  if (detectedKeys.value.length === 0) return
+  const trigger = [...detectedKeys.value]
+  openAddRemapModal({
+    trigger,
+    output: ['ctrl', 'w'],
+    description: describeKeys(trigger),
     enabled: true
   })
+}
+
+const openAddRemapModal = (initialData = null) => {
+  remapModal.value = {
+    show: true,
+    isEdit: false,
+    index: -1,
+    data: initialData ? { ...initialData } : {
+      trigger: ['x1'],
+      output: ['ctrl', 'w'],
+      description: '鼠标侧键操作',
+      enabled: true
+    }
+  }
+}
+
+const openEditRemapModal = (km, idx) => {
+  remapModal.value = {
+    show: true,
+    isEdit: true,
+    index: idx,
+    data: JSON.parse(JSON.stringify(km))
+  }
+}
+
+const insertTriggerKey = (k) => {
+  if (!remapModal.value.data.trigger.includes(k)) {
+    remapModal.value.data.trigger.push(k)
+  }
+}
+
+const saveRemapModal = () => {
+  if (remapModal.value.data.trigger.length === 0) {
+    showToast('触发按键不能为空', 'danger')
+    return
+  }
+  if (remapModal.value.data.output.length === 0) {
+    showToast('输出按键不能为空', 'danger')
+    return
+  }
+  if (remapModal.value.isEdit) {
+    config.value.mouse.mappings[remapModal.value.index] = remapModal.value.data
+  } else {
+    config.value.mouse.mappings.push(remapModal.value.data)
+  }
+  remapModal.value.show = false
   saveAll()
 }
 
@@ -1413,10 +1654,15 @@ const deleteKeyMapping = (index) => {
   saveAll()
 }
 
-const setMousePreset = (mapping, keys) => {
-  mapping.output = [...keys]
+const addQuickPreset = (trigger, output, desc) => {
+  config.value.mouse.mappings.push({
+    trigger: [...trigger],
+    output: [...output],
+    description: desc,
+    enabled: true
+  })
   saveAll()
-  showToast(`已设为 ${keys.join('+').toUpperCase()}`, 'info')
+  showToast(`已添加映射: ${formatKeyLabel(trigger[0])} → ${output.join('+').toUpperCase()}`, 'success')
 }
 
 // WebDAV Operations
@@ -1466,19 +1712,19 @@ const applyWebDavPreset = (preset) => {
     config.value.webdav.server_url = 'http://175.178.147.236:7779/'
     config.value.webdav.username = 'gxy'
     config.value.webdav.password = '***REMOVED***'
-    config.value.webdav.remote_filename = 'bindx/bindx_config.json'
+    config.value.webdav.remote_filename = 'bindx'
     showToast('已载入自建服务配置', 'info')
   } else if (preset === 'jianguoyun') {
     config.value.webdav.server_url = 'https://dav.jianguoyun.com/dav/'
-    config.value.webdav.remote_filename = 'bindx/bindx_config.json'
+    config.value.webdav.remote_filename = 'bindx'
     showToast('已载入坚果云地址', 'info')
   } else if (preset === 'alist') {
     config.value.webdav.server_url = 'http://127.0.0.1:5244/dav/'
-    config.value.webdav.remote_filename = 'bindx/bindx_config.json'
+    config.value.webdav.remote_filename = 'bindx'
     showToast('已载入 Alist 地址', 'info')
   } else if (preset === 'nextcloud') {
     config.value.webdav.server_url = 'https://your-nextcloud.com/remote.php/dav/files/USERNAME/'
-    config.value.webdav.remote_filename = 'bindx/bindx_config.json'
+    config.value.webdav.remote_filename = 'bindx'
     showToast('已载入 Nextcloud 模板', 'info')
   }
 }
@@ -1522,20 +1768,28 @@ const openDataFolder = async () => {
 
 const resolvedWebDavUrl = computed(() => {
   if (!config.value.webdav.server_url) return ''
-  let base = config.value.webdav.server_url.trim()
-  if (!base.endsWith('/')) base += '/'
-  let path = (config.value.webdav.remote_filename || 'bindx/bindx_config.json').trim()
-  while (path.startsWith('/')) path = path.slice(1)
-  return base + path
+  let base = config.value.webdav.server_url.trim().replace(/\/+$/, '')
+  let dir = (config.value.webdav.remote_filename || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+  if (!dir || dir === 'bindx_config.json') {
+    return `${base}/bindx/`
+  }
+  if (dir.endsWith('/bindx_config.json')) {
+    dir = dir.slice(0, -'/bindx_config.json'.length).replace(/^\/+|\/+$/g, '')
+    return `${base}/${dir || 'bindx'}/`
+  }
+  return `${base}/${dir}/`
 })
 
 const remoteDirectory = computed(() => {
-  const filename = (config.value.webdav.remote_filename || 'bindx/bindx_config.json').trim()
-  const parts = filename.replace(/\\/g, '/').split('/').filter(Boolean)
-  if (parts.length > 1) {
-    return '/' + parts.slice(0, -1).join('/') + '/'
+  let raw = (config.value.webdav?.remote_filename || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+  if (!raw || raw === 'bindx_config.json') {
+    return '/bindx/'
   }
-  return '/'
+  if (raw.endsWith('/bindx_config.json')) {
+    raw = raw.slice(0, -'/bindx_config.json'.length).replace(/^\/+|\/+$/g, '')
+    return raw ? `/${raw}/` : '/bindx/'
+  }
+  return `/${raw}/`
 })
 
 // Global hook for tray
@@ -2360,80 +2614,124 @@ onMounted(() => {
   box-shadow: 0 0 6px #10b981;
 }
 
-.mouse-cards-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-}
-.mouse-tile-card {
-  padding: 20px;
-  background: var(--bg-card-subtle);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
+/* Key Detector & Pad */
+.detector-card {
+  padding: 22px 24px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  transition: all 0.2s ease;
+  gap: 16px;
+  border-radius: 14px;
 }
-.mouse-tile-card:hover {
-  background: var(--bg-card);
-  border-color: var(--border-hover);
-  box-shadow: var(--card-shadow);
-  transform: translateY(-1px);
-}
-.mouse-tile-top {
+.detector-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-.mouse-badge-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.section-icon-wrap.detector-wrap {
+  background: rgba(99, 102, 241, 0.12);
 }
-.mouse-keycap {
-  font-size: 13px;
-  font-weight: 700;
-  padding: 5px 12px;
-  background: rgba(236, 72, 153, 0.12);
-  color: #db2777;
-  border-color: rgba(236, 72, 153, 0.3);
-}
-[data-theme="slate"] .mouse-keycap {
-  background: rgba(236, 72, 153, 0.22);
-  color: #f472b6;
-  border-color: rgba(236, 72, 153, 0.45);
-}
-.mouse-btn-name {
-  display: block;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-.mouse-btn-desc {
-  display: block;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 1px;
-}
-.mouse-mapping-flow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: var(--bg-card);
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-}
-.flow-step {
+.detector-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.flow-label {
-  font-size: 11.5px;
+.detector-pad {
+  padding: 26px 20px;
+  background: var(--bg-card-subtle);
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 110px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+.detector-pad:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card);
+}
+.detector-pad.active, .detector-pad:focus {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.04);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15);
+}
+.detector-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.detector-hint-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.detector-hint-sub {
+  font-size: 12px;
   color: var(--text-muted);
-  font-weight: 500;
+}
+.detected-keys-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.detector-plus {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.keycap.detector-keycap {
+  font-size: 14.5px;
+  padding: 8px 16px;
+  border-radius: 9px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+.keycap.mouse {
+  background: rgba(236, 72, 153, 0.12);
+  color: #db2777;
+  border-color: rgba(236, 72, 153, 0.35);
+}
+[data-theme="slate"] .keycap.mouse {
+  background: rgba(236, 72, 153, 0.22);
+  color: #f472b6;
+  border-color: rgba(236, 72, 153, 0.45);
+}
+.detected-sub-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.detector-tag {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+  border-radius: 6px;
+}
+[data-theme="slate"] .detector-tag {
+  background: rgba(99, 102, 241, 0.25);
+  color: #818cf8;
+}
+.detector-presets {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+.modal-chips-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 .keycap.accent {
   background: rgba(99, 102, 241, 0.12);
@@ -2444,19 +2742,6 @@ onMounted(() => {
   background: rgba(99, 102, 241, 0.22);
   color: #818cf8;
   border-color: rgba(99, 102, 241, 0.4);
-}
-.mouse-input-row {
-  width: 100%;
-}
-.quick-presets {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.preset-hint {
-  font-size: 11.5px;
-  color: var(--text-dim);
 }
 .preset-tag {
   font-size: 11px;
