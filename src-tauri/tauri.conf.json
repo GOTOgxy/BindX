@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "BindX",
   "version": "2.0.0",
-  "identifier": "com.bindx.app",
+  "identifier": "com.bindx.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -13,13 +13,14 @@
     "windows": [
       {
         "label": "main",
-        "title": "BindX - Windows 快捷键与输入增强",
-        "width": 940,
-        "height": 640,
+        "title": "BindX",
+        "width": 960,
+        "height": 650,
         "minWidth": 780,
         "minHeight": 520,
         "resizable": true,
-        "center": true
+        "center": true,
+        "decorations": false
       }
     ],
     "security": {

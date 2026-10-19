@@ -1,23 +1,18 @@
 <template>
   <div class="app-container">
-    <!-- Top Titlebar / Header -->
-    <header class="app-header">
-      <div class="brand">
-        <div class="logo-box">
-          <svg viewBox="0 0 512 512" class="w-6 h-6">
-            <rect x="30" y="30" width="452" height="452" rx="90" fill="#1e1b4b" stroke="#38bdf8" stroke-width="24" />
-            <path d="M140 140 L372 372" stroke="#38bdf8" stroke-width="48" stroke-linecap="round" />
-            <path d="M372 140 L140 372" stroke="#818cf8" stroke-width="48" stroke-linecap="round" />
-            <circle cx="256" cy="256" r="28" fill="#c084fc" />
-          </svg>
+    <!-- Top Titlebar / Header (Borderless Unified) -->
+    <header class="app-header" data-tauri-drag-region>
+      <div class="brand" data-tauri-drag-region>
+        <div class="logo-box" data-tauri-drag-region>
+          <img :src="appIcon" class="brand-icon" alt="BindX Icon" />
         </div>
-        <div class="brand-text">
-          <span class="title">BindX</span>
-          <span class="version-tag">v2.0 Native</span>
+        <div class="brand-text" data-tauri-drag-region>
+          <span class="title" data-tauri-drag-region>BindX</span>
+          <span class="version-tag" data-tauri-drag-region>Native</span>
         </div>
       </div>
 
-      <div class="header-status">
+      <div class="header-status" data-tauri-drag-region>
         <!-- Hotkey Engine Pill -->
         <div class="status-pill" :class="{ active: config.app.hotkey_running }">
           <span class="dot"></span>
@@ -40,8 +35,21 @@
 
         <!-- Autostart Badge -->
         <div class="badge-pill" :class="{ enabled: config.app.autostart_enabled }">
-          开机自启: {{ config.app.autostart_enabled ? '已开启' : '关闭' }}
+          自启: {{ config.app.autostart_enabled ? '开' : '关' }}
         </div>
+      </div>
+
+      <!-- Window Control Buttons (Native Windows 11 Fluent style) -->
+      <div class="window-controls">
+        <button class="win-btn" title="最小化" @click="minimizeWindow">
+          <Minus class="w-3.5 h-3.5" />
+        </button>
+        <button class="win-btn" title="最大化/还原" @click="toggleMaximize">
+          <Square class="w-3 h-3" />
+        </button>
+        <button class="win-btn win-close" title="收起至托盘" @click="hideWindow">
+          <X class="w-3.5 h-3.5" />
+        </button>
       </div>
     </header>
 
@@ -712,6 +720,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import appIcon from './assets/icon.png'
 import { 
   LayoutDashboard, 
   Keyboard, 
@@ -723,8 +733,25 @@ import {
   Edit,
   Trash2,
   Eye,
-  EyeOff
+  EyeOff,
+  Minus,
+  Square,
+  X
 } from '@lucide/vue'
+
+const appWindow = getCurrentWindow()
+
+const minimizeWindow = () => {
+  appWindow.minimize()
+}
+
+const toggleMaximize = () => {
+  appWindow.toggleMaximize()
+}
+
+const hideWindow = () => {
+  appWindow.hide()
+}
 
 const currentTab = ref('overview')
 const showPassword = ref(false)
@@ -1030,15 +1057,16 @@ onMounted(() => {
 }
 
 .app-header {
-  height: 52px;
-  background: rgba(15, 23, 42, 0.85);
+  height: 48px;
+  background: rgba(15, 23, 42, 0.95);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 18px;
+  padding: 0 10px 0 16px;
   flex-shrink: 0;
+  user-select: none;
 }
 
 .brand {
@@ -1046,18 +1074,52 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
 }
+.brand-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  border-radius: 4px;
+}
 .brand-text {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .brand-text .title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.3px;
   background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 14px;
+}
+.win-btn {
+  width: 34px;
+  height: 30px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.win-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+}
+.win-close:hover {
+  background: #ef4444 !important;
+  color: #ffffff !important;
 }
 .version-tag {
   font-size: 10px;
