@@ -13,7 +13,7 @@
         </div>
         <div class="brand-text" data-tauri-drag-region>
           <span class="title" data-tauri-drag-region>BindX</span>
-          <span class="version-tag" data-tauri-drag-region>v2.0</span>
+          <span class="version-tag" data-tauri-drag-region>v2.0.1</span>
         </div>
       </div>
 
@@ -313,7 +313,7 @@
               <div class="integration-meta">
                 <div class="meta-item">
                   <span class="meta-label">当前版本</span>
-                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.0</span>
+                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.1</span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">开机自启</span>
@@ -795,7 +795,7 @@
                   </div>
                   <div>
                     <h3 class="hero-title">BindX</h3>
-                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v2.0.0</span></p>
+                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v2.0.1</span></p>
                   </div>
                 </div>
                 <div>

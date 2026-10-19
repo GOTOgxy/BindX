@@ -1,6 +1,6 @@
 [package]
 name = "bindx"
-version = "2.0.0"
+version = "2.0.1"
 description = "BindX - Windows Input Enhancement & Hotkey Manager"
 authors = ["BindX Contributors"]
 edition = "2021"
@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2.0.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
