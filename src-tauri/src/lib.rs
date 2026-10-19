@@ -94,7 +94,11 @@ pub fn run() {
             check_software_update,
             open_external_url,
             select_executable_file,
-            set_recording_state
+            set_recording_state,
+            check_start_menu_status,
+            toggle_start_menu_shortcut,
+            locate_start_menu_shortcut,
+            create_desktop_shortcut
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

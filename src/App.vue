@@ -1070,6 +1070,57 @@
                   </button>
                 </div>
               </div>
+
+              <!-- Tile 5: Start Menu & Screen Pinning -->
+              <div class="setting-tile">
+                <div class="tile-icon-box start-box">
+                  <LayoutGrid class="w-5 h-5 text-indigo-500" />
+                </div>
+                <div class="tile-content">
+                  <div class="flex items-center gap-2">
+                    <span class="tile-title">固定至「开始」菜单 / 屏幕</span>
+                    <span class="status-tag mini" :class="isStartMenuPinned ? 'online' : 'offline'">
+                      {{ isStartMenuPinned ? '已加入开始菜单' : '未添加' }}
+                    </span>
+                  </div>
+                  <span class="tile-desc">生成系统应用快捷方式，支持 Win 键搜索瞬间找到 BindX 并一键固定磁贴</span>
+                </div>
+                <div class="tile-action-buttons">
+                  <button 
+                    class="btn text-xs" 
+                    :class="isStartMenuPinned ? 'btn-secondary' : 'btn-primary'"
+                    @click="onToggleStartMenu"
+                  >
+                    <Pin class="w-3.5 h-3.5 mr-1" />
+                    <span>{{ isStartMenuPinned ? '从开始菜单移除' : '添加至开始菜单' }}</span>
+                  </button>
+                  <button 
+                    class="btn btn-secondary text-xs" 
+                    title="在开始菜单文件夹中高亮选中 BindX 快捷方式，可右键一键「固定到“开始”屏幕」" 
+                    @click="onLocateStartMenu"
+                  >
+                    <FolderOpen class="w-3.5 h-3.5 mr-1" />
+                    <span>在文件夹定位</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Tile 6: Desktop Shortcut -->
+              <div class="setting-tile">
+                <div class="tile-icon-box desktop-box">
+                  <ExternalLink class="w-5 h-5 text-cyan-500" />
+                </div>
+                <div class="tile-content">
+                  <span class="tile-title">发送桌面快捷方式</span>
+                  <span class="tile-desc">在当前 Windows 桌面上创建快速启动图标</span>
+                </div>
+                <div class="tile-action">
+                  <button class="btn btn-secondary text-xs" @click="onCreateDesktop">
+                    <ExternalLink class="w-3.5 h-3.5 mr-1" />
+                    <span>创建桌面图标</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1599,7 +1650,9 @@ import {
   Upload,
   FolderOpen,
   Radio,
-  Layers
+  Layers,
+  Pin,
+  LayoutGrid
 } from '@lucide/vue'
 
 const appWindow = getCurrentWindow()
@@ -2681,8 +2734,54 @@ window.navigateToTab = (tab) => {
   currentTab.value = tab
 }
 
+// Start Menu & Desktop Shortcut Operations
+const isStartMenuPinned = ref(false)
+
+const checkStartMenuStatus = async () => {
+  try {
+    isStartMenuPinned.value = await invoke('check_start_menu_status')
+  } catch (err) {
+    console.warn('check_start_menu_status error:', err)
+  }
+}
+
+const onToggleStartMenu = async () => {
+  try {
+    const nextState = !isStartMenuPinned.value
+    const res = await invoke('toggle_start_menu_shortcut', { enable: nextState })
+    isStartMenuPinned.value = res
+    if (res) {
+      showToast('已成功添加到 Windows 开始菜单应用列表！您也可以点击“在文件夹定位”右键将其固定至磁贴', 'success', 5000)
+    } else {
+      showToast('已从 Windows 开始菜单移除', 'info')
+    }
+  } catch (err) {
+    showToast('操作开始菜单失败: ' + err, 'danger')
+  }
+}
+
+const onLocateStartMenu = async () => {
+  try {
+    await invoke('locate_start_menu_shortcut')
+    isStartMenuPinned.value = true
+    showToast('已在资源管理器中定位快捷方式，右键点击即可选择「固定到“开始”屏幕」', 'info', 5000)
+  } catch (err) {
+    showToast('打开开始菜单目录失败: ' + err, 'danger')
+  }
+}
+
+const onCreateDesktop = async () => {
+  try {
+    await invoke('create_desktop_shortcut')
+    showToast('已在桌面成功创建 BindX 快捷方式！', 'success')
+  } catch (err) {
+    showToast('创建桌面快捷方式失败: ' + err, 'danger')
+  }
+}
+
 onMounted(() => {
   fetchConfig()
+  checkStartMenuStatus()
 })
 </script>
 
@@ -4143,6 +4242,12 @@ onMounted(() => {
 .folder-box {
   background: rgba(16, 185, 129, 0.12);
 }
+.start-box {
+  background: rgba(99, 102, 241, 0.12);
+}
+.desktop-box {
+  background: rgba(6, 182, 212, 0.12);
+}
 .tile-content {
   display: flex;
   flex-direction: column;
@@ -4203,6 +4308,18 @@ onMounted(() => {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
+}
+.tile-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.status-tag.mini {
+  font-size: 11px;
+  padding: 1.5px 8px;
+  border-radius: 9999px;
+  font-weight: 500;
 }
 
 /* Toast */

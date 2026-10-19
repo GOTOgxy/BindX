@@ -240,3 +240,90 @@ pub fn set_recording_state(state: tauri::State<'_, AppState>, active: bool) -> R
     Ok(())
 }
 
+use std::os::windows::process::CommandExt;
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn get_start_menu_shortcut_path() -> Result<std::path::PathBuf, String> {
+    let data_dir = dirs::data_dir().ok_or_else(|| "无法获取 AppData 路径".to_string())?;
+    Ok(data_dir.join("Microsoft\\Windows\\Start Menu\\Programs\\BindX.lnk"))
+}
+
+fn create_shortcut_internal(target_exe: &std::path::Path, shortcut_path: &std::path::Path, desc: &str) -> Result<(), String> {
+    if let Some(parent) = shortcut_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let work_dir = target_exe.parent().unwrap_or(std::path::Path::new(""));
+    let script = format!(
+        "$w = New-Object -ComObject WScript.Shell; \
+         $s = $w.CreateShortcut('{}'); \
+         $s.TargetPath = '{}'; \
+         $s.WorkingDirectory = '{}'; \
+         $s.IconLocation = '{},0'; \
+         $s.Description = '{}'; \
+         $s.Save()",
+        shortcut_path.to_string_lossy().replace('\'', "''"),
+        target_exe.to_string_lossy().replace('\'', "''"),
+        work_dir.to_string_lossy().replace('\'', "''"),
+        target_exe.to_string_lossy().replace('\'', "''"),
+        desc.replace('\'', "''")
+    );
+
+    let output = std::process::Command::new("powershell")
+        .creation_flags(CREATE_NO_WINDOW)
+        .arg("-NoProfile")
+        .arg("-Command")
+        .arg(&script)
+        .output()
+        .map_err(|e| format!("执行 PowerShell 创建快捷方式失败: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[tauri::command]
+pub fn check_start_menu_status() -> Result<bool, String> {
+    let path = get_start_menu_shortcut_path()?;
+    Ok(path.exists())
+}
+
+#[tauri::command]
+pub fn toggle_start_menu_shortcut(enable: bool) -> Result<bool, String> {
+    let path = get_start_menu_shortcut_path()?;
+    if enable {
+        let current_exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+        create_shortcut_internal(&current_exe, &path, "BindX - 快捷键与按键映射管理器")?;
+        Ok(true)
+    } else {
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub fn locate_start_menu_shortcut() -> Result<(), String> {
+    let path = get_start_menu_shortcut_path()?;
+    if !path.exists() {
+        let current_exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+        create_shortcut_internal(&current_exe, &path, "BindX - 快捷键与按键映射管理器")?;
+    }
+    let arg = format!("/select,\"{}\"", path.to_string_lossy());
+    let _ = std::process::Command::new("explorer")
+        .arg(&arg)
+        .spawn();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn create_desktop_shortcut() -> Result<(), String> {
+    let desktop_dir = dirs::desktop_dir().ok_or_else(|| "无法获取桌面路径".to_string())?;
+    let path = desktop_dir.join("BindX.lnk");
+    let current_exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+    create_shortcut_internal(&current_exe, &path, "BindX - 快捷键与按键映射管理器")?;
+    Ok(())
+}
+
