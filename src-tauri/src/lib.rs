@@ -12,8 +12,20 @@ use engine::{HotkeyEngine, RemapEngine};
 use std::sync::Arc;
 use tauri::{Manager, WindowEvent};
 
+pub fn log_panic(info: &std::panic::PanicHookInfo) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("bindx_error.log") {
+        let _ = writeln!(f, "PANIC: {:?}", info);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    std::panic::set_hook(Box::new(|info| {
+        log_panic(info);
+    }));
+
     let cfg = load_config();
 
     let hotkey_engine = Arc::new(HotkeyEngine::new());
@@ -37,9 +49,7 @@ pub fn run() {
         })
         .setup(move |app| {
             // Setup system tray
-            if let Err(e) = tray::setup_tray(app.handle()) {
-                eprintln!("Failed to setup tray: {}", e);
-            }
+            let _ = tray::setup_tray(app.handle());
 
             // Bind toggle window callback for hotkey engine
             let app_handle = app.handle().clone();
@@ -55,8 +65,12 @@ pub fn run() {
                 }
             });
 
-            // Prevent window close from exiting app: hide to tray
+            // Show window on launch and prevent window close from exiting app: hide to tray
             if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+
                 let win_clone = window.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
