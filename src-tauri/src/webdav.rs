@@ -72,7 +72,31 @@ impl WebDavClient {
         }
     }
 
+    async fn ensure_parent_dirs(&self, cfg: &WebDavConfig) -> Result<(), String> {
+        let base = cfg.server_url.trim().trim_end_matches('/');
+        let path = cfg.remote_filename.trim().trim_start_matches('/');
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() > 1 {
+            let mut current_dir = String::new();
+            for part in &parts[..parts.len() - 1] {
+                if !current_dir.is_empty() {
+                    current_dir.push('/');
+                }
+                current_dir.push_str(part);
+                let dir_url = format!("{}/{}/", base, current_dir);
+                let mut req = self.client.request(Method::from_bytes(b"MKCOL").unwrap(), &dir_url);
+                if !cfg.username.is_empty() {
+                    req = req.basic_auth(&cfg.username, Some(&cfg.password));
+                }
+                let _ = req.send().await;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn upload_config(&self, cfg: &WebDavConfig, json_str: &str) -> Result<String, String> {
+        self.ensure_parent_dirs(cfg).await?;
+
         let url = Self::build_remote_url(cfg)?;
         let mut req = self.client.put(&url)
             .header("Content-Type", "application/json; charset=utf-8")

@@ -1,7 +1,12 @@
 <template>
   <div class="app-container">
     <!-- Top Titlebar / Header (Borderless Unified) -->
-    <header class="app-header" data-tauri-drag-region>
+    <header 
+      class="app-header" 
+      data-tauri-drag-region 
+      @mousedown="onHeaderMouseDown" 
+      @dblclick="onHeaderDblClick"
+    >
       <div class="brand" data-tauri-drag-region>
         <div class="logo-box" data-tauri-drag-region>
           <img :src="appIcon" class="brand-icon" alt="BindX Icon" />
@@ -421,6 +426,7 @@
             <div class="mb-5 pb-4 border-b border-slate-700/60">
               <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">快速填入推荐服务商：</label>
               <div class="flex flex-wrap gap-2">
+                <button class="btn btn-secondary text-xs" @click="applyWebDavPreset('custom_server')">★ 我的自建服务器 (175.178.147.236)</button>
                 <button class="btn btn-secondary text-xs" @click="applyWebDavPreset('jianguoyun')">坚果云 (Nutstore)</button>
                 <button class="btn btn-secondary text-xs" @click="applyWebDavPreset('alist')">Alist 本地/远程</button>
                 <button class="btn btn-secondary text-xs" @click="applyWebDavPreset('nextcloud')">Nextcloud</button>
@@ -433,10 +439,10 @@
                 <input 
                   type="text" 
                   class="input-field" 
-                  placeholder="https://dav.jianguoyun.com/dav/"
+                  placeholder="http://175.178.147.236:7779/"
                   v-model="config.webdav.server_url" 
                 />
-                <span class="field-hint">坚果云示例: https://dav.jianguoyun.com/dav/ (需在坚果云网页版生成应用密码)</span>
+                <span class="field-hint">根地址示例: http://175.178.147.236:7779/ 或 https://dav.jianguoyun.com/dav/</span>
               </div>
 
               <div class="form-item">
@@ -444,7 +450,7 @@
                 <input 
                   type="text" 
                   class="input-field" 
-                  placeholder="user@example.com"
+                  placeholder="gxy"
                   v-model="config.webdav.username" 
                 />
               </div>
@@ -469,14 +475,15 @@
                 </div>
               </div>
 
-              <div class="form-item">
-                <label class="form-label">云端存储文件名</label>
+              <div class="form-item col-span-2">
+                <label class="form-label">云端存储路径（自动维护子目录）</label>
                 <input 
                   type="text" 
                   class="input-field" 
-                  placeholder="bindx_config.json"
+                  placeholder="bindx/bindx_config.json"
                   v-model="config.webdav.remote_filename" 
                 />
+                <span class="field-hint">输入 <code>bindx/bindx_config.json</code> 会在 WebDAV 根目录下自动创建 <code>/bindx/</code> 文件夹并存入配置</span>
               </div>
 
               <div class="form-item flex items-center justify-between pt-6">
@@ -753,6 +760,26 @@ const hideWindow = () => {
   appWindow.hide()
 }
 
+const onHeaderMouseDown = async (e) => {
+  if (e.button === 0 && !e.target.closest('button, input, select, label, .window-controls')) {
+    try {
+      await invoke('drag_window')
+    } catch {
+      try {
+        await appWindow.startDragging()
+      } catch (err) {
+        console.error('startDragging error:', err)
+      }
+    }
+  }
+}
+
+const onHeaderDblClick = (e) => {
+  if (!e.target.closest('button, input, select, label, .window-controls')) {
+    appWindow.toggleMaximize()
+  }
+}
+
 const currentTab = ref('overview')
 const showPassword = ref(false)
 
@@ -993,17 +1020,23 @@ const onDownloadWebDav = async () => {
 }
 
 const applyWebDavPreset = (preset) => {
-  if (preset === 'jianguoyun') {
+  if (preset === 'custom_server') {
+    config.value.webdav.server_url = 'http://175.178.147.236:7779/'
+    config.value.webdav.username = 'gxy'
+    config.value.webdav.password = '***REMOVED***'
+    config.value.webdav.remote_filename = 'bindx/bindx_config.json'
+    showToast('已填入您的自建 WebDAV 服务器凭据与 /bindx 目录', 'info')
+  } else if (preset === 'jianguoyun') {
     config.value.webdav.server_url = 'https://dav.jianguoyun.com/dav/'
-    config.value.webdav.remote_filename = 'bindx_config.json'
+    config.value.webdav.remote_filename = 'bindx/bindx_config.json'
     showToast('已填入坚果云服务器地址，请输入您的坚果云账号和应用授权密码', 'info')
   } else if (preset === 'alist') {
     config.value.webdav.server_url = 'http://127.0.0.1:5244/dav/'
-    config.value.webdav.remote_filename = 'bindx_config.json'
+    config.value.webdav.remote_filename = 'bindx/bindx_config.json'
     showToast('已填入 Alist 默认本地 WebDAV 地址', 'info')
   } else if (preset === 'nextcloud') {
     config.value.webdav.server_url = 'https://your-nextcloud.com/remote.php/dav/files/USERNAME/'
-    config.value.webdav.remote_filename = 'bindx_config.json'
+    config.value.webdav.remote_filename = 'bindx/bindx_config.json'
     showToast('已填入 Nextcloud 模板，请替换域名和用户名', 'info')
   }
 }
@@ -1074,11 +1107,21 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
 }
+.logo-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  padding: 3px;
+}
 .brand-icon {
-  width: 22px;
-  height: 22px;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
-  border-radius: 4px;
 }
 .brand-text {
   display: flex;

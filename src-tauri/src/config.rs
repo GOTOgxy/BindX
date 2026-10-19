@@ -141,7 +141,7 @@ pub struct WebDavConfig {
 }
 
 fn default_remote_filename() -> String {
-    "bindx_config.json".to_string()
+    "bindx/bindx_config.json".to_string()
 }
 
 impl Default for WebDavConfig {

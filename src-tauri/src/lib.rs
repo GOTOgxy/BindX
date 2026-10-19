@@ -92,7 +92,8 @@ pub fn run() {
             upload_to_webdav,
             download_from_webdav,
             check_software_update,
-            open_external_url
+            open_external_url,
+            drag_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -144,3 +144,8 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("打开链接失败: {}", e))?;
     Ok(())
 }
+
+#[tauri::command]
+pub fn drag_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.start_dragging().map_err(|e| e.to_string())
+}
