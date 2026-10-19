@@ -228,7 +228,8 @@ class OverviewTab(ctk.CTkFrame):
         )
         if status_wrap:
             status = _auto_wrap_label(status, initial_wraplength=status_wrap)
-        status.grid(row=1, column=0, sticky=tk.EW, padx=scaled(self, 16), pady=(0, scaled(self, 8)))
+        status.grid(row=1, column=0, sticky=tk.EW,
+                    padx=scaled(self, 16), pady=(0, scaled(self, 8)))
         btns = ctk.CTkFrame(card, fg_color="transparent")
         btns.grid(row=3, column=0, sticky=tk.EW,
                   padx=scaled(self, 16), pady=(0, scaled(self, 16)))
@@ -264,23 +265,29 @@ class OverviewTab(ctk.CTkFrame):
     GROUP_GAP = 16  # 逻辑像素：动作组与设置组之间的间距
 
     def _flow_cell(self, master):
-        """全局动作里的一格：透明容器，按钮拉伸铺满、开关/下拉居中。"""
+        """全局动作里的一格：原生透明容器，自适应浅色/深色主题。"""
         return ctk.CTkFrame(master, fg_color="transparent")
 
     def _on_actions_configure(self, event=None):
-        """全局动作区宽度变化 -> 防抖重排（折行方案没变就什么都不做）。"""
+        """全局动作区宽度变化 -> 立即重排（折行方案没变就什么都不做）。"""
+        width = event.width if event is not None else None
+        if width is not None and width > 1:
+            if getattr(self, "_last_actions_w", None) == width:
+                return
+            self._last_actions_w = width
         if self._flow_timer:
             self.after_cancel(self._flow_timer)
-        self._flow_timer = self.after(90, self._layout_flows)
+            self._flow_timer = None
+        self._layout_flows(width=width)
 
-    def _layout_flows(self):
+    def _layout_flows(self, width=None):
         """按当前实测宽度重排：全局动作折行 + 卡片并排/堆叠。
 
         只有「折行方案」或「卡片列数」真的变了才会去动 grid，
         所以窗口缩放期间被反复调用也几乎零成本。
         """
         self._flow_timer = None
-        available = self.actions_body.winfo_width()
+        available = width if (width is not None and width > 1) else self.actions_body.winfo_width()
         gap = rescaled(self, self.FLOW_GAP)
         groups = (
             (self.action_grid, self._action_cells, "actions"),
@@ -290,11 +297,20 @@ class OverviewTab(ctk.CTkFrame):
         # 在竖直方向对齐，看起来是一整块规整的网格，而不是两截错位的行。
         parts, ref = self._flow_partition([cells for _c, cells, _k in groups],
                                           available, gap)
+        flow_changed = False
         for (container, cells, key), part in zip(groups, parts):
+            state = (tuple(part), ref)
+            if self._flow_state.get(key) != state:
+                flow_changed = True
             self._flow_layout(container, cells, part, key, ref)
+
+        old_single = self._cards_single
         self._apply_card_columns()
-        self._apply_card_buttons()
-        self._notify_height()
+        card_changed = (self._cards_single != old_single)
+
+        btn_changed = self._apply_card_buttons()
+        if flow_changed or card_changed or btn_changed:
+            self._notify_height()
 
     def _notify_height(self):
         """告诉滚动页「内容自然高度可能变了，请重量一次」。
@@ -313,20 +329,10 @@ class OverviewTab(ctk.CTkFrame):
             pass
 
     def relayout_now(self):
-        """窗口缩放停手后由 app 调用：立刻按新宽度重排，不等防抖。"""
+        """立刻按新宽度重排，不等防抖。"""
         if self._flow_timer:
             self.after_cancel(self._flow_timer)
-        # 新宽度要穿过「页面画布 -> 画布窗口项 -> 内层 frame -> 本页 -> 各容器」
-        # 好几层几何才传得到 actions_body / cards 上，单次 update_idletasks
-        # 量到的还是旧宽度，折行与卡片并排的判定就会慢半拍（要靠 90ms 后的
-        # 防抖再补一次，用户会看到布局「跳一下」）。这里冲刷到宽度稳定为止。
-        last = None
-        for _ in range(3):
-            self.update_idletasks()
-            now = (self.actions_body.winfo_width(), self.cards.winfo_width())
-            if now == last:
-                break
-            last = now
+            self._flow_timer = None
         self._layout_flows()
 
     # -------- 真实最小宽度 --------
@@ -335,8 +341,6 @@ class OverviewTab(ctk.CTkFrame):
     # 永远排不出 3 列——这正是「全局动作总是两列、长短不一」的根因。
     # 下面按控件内部结构算真实下限：文字实测宽度 + 内部固定留白。
     def _min_width_of(self, widget):
-        if isinstance(widget, ctk.CTkFrame):
-            return self._cell_min_width(widget)
         if isinstance(widget, ctk.CTkButton):
             label = getattr(widget, "_text_label", None)
             text = label.winfo_reqwidth() if label is not None else 0
@@ -345,20 +349,29 @@ class OverviewTab(ctk.CTkFrame):
                       getattr(widget, "_border_spacing", 0))
             return text + 2 * rescaled(self, pad)
         if isinstance(widget, ctk.CTkOptionMenu):
-            # 内部 tk.Label 自带左右 padx（右侧那块留给下拉箭头）就是真实下限
             label = getattr(widget, "_text_label", None)
-            if label is not None:
-                return label.winfo_reqwidth()
+            text = label.winfo_reqwidth() if label is not None else 0
+            return text + rescaled(self, 24)
+        if isinstance(widget, ctk.CTkSwitch):
+            label = getattr(widget, "_label", None) or getattr(widget, "_text_label", None)
+            text = label.winfo_reqwidth() if label is not None else 0
+            return text + rescaled(self, 46)
         if isinstance(widget, ctk.CTkLabel):
             label = getattr(widget, "_label", None)
             if label is not None:
                 return label.winfo_reqwidth() + rescaled(self, 2)
+            return widget.winfo_reqwidth()
+        if isinstance(widget, (ctk.CTkFrame, tk.Frame)):
+            return self._cell_min_width(widget)
         return widget.winfo_reqwidth()
 
     def _cell_min_width(self, frame):
         """容器（格子 / 内层 frame）的最小宽度 = 子控件最小宽度之和 + 间距。"""
         try:
-            kids = [k for k in frame.winfo_children() if isinstance(k, CTkBaseClass)]
+            kids = [
+                k for k in frame.winfo_children()
+                if not isinstance(k, (ctk.windows.widgets.core_rendering.ctk_canvas.CTkCanvas, tk.Canvas))
+            ]
         except tk.TclError:
             return 1
         total = 0
@@ -426,12 +439,6 @@ class OverviewTab(ctk.CTkFrame):
         rows = self._flow_row_pool.setdefault(key, [])
         while len(rows) < count:
             row = ctk.CTkFrame(container, fg_color="transparent")
-            # 格子是 container 的子窗口（grid(in_=row) 只换几何容器、不换
-            # 窗口树），所以行框与格子是同一层的兄弟窗口：Tk 按创建顺序
-            # 叠放，后创建的行框会压在格子上面。CTkFrame 即使 fg_color=
-            # "transparent"，内部 canvas 也是一块不透明的 Tk 窗口（底色取
-            # 父容器背景色），正好把整排按钮盖成一片空白——「全局动作全空」
-            # 就是这个原因。新建的行框一律沉到最底层，格子/按钮才能露出来。
             row.lower()
             rows.append(row)
         return rows
@@ -546,6 +553,7 @@ class OverviewTab(ctk.CTkFrame):
         判定用「横排所需宽度」（各按钮请求宽度之和 + 间距），它跟当前是横排
         还是竖排无关，所以不会来回抖动。
         """
+        changed = False
         for card in (self.hk_card, self.mc_card, self.sync_card, self.code_card):
             slaves = card.grid_slaves(row=3, column=0)
             if not slaves:
@@ -558,6 +566,7 @@ class OverviewTab(ctk.CTkFrame):
             vertical = width < self._row_need_width(row)
             if vertical == self._card_btn_vertical.get(card):
                 continue
+            changed = True
             self._card_btn_vertical[card] = vertical
             for index, btn in enumerate(kids):
                 # 这里的 gap 是「pack 用的逻辑像素」，跟上面判定用的物理像素
@@ -571,6 +580,7 @@ class OverviewTab(ctk.CTkFrame):
                 else:
                     btn.pack(side=tk.LEFT, fill=tk.X, expand=True,
                              padx=(0, pad), pady=0)
+        return changed
 
     def _start_hk(self):
         self.controller.start_hotkey()

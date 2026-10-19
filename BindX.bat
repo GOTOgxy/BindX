@@ -9,6 +9,7 @@ where pythonw >nul 2>nul && set "PYW=pythonw"
 
 if not defined PYW if exist "C:\Users\gxy\miniforge3\pythonw.exe" set "PYW=C:\Users\gxy\miniforge3\pythonw.exe"
 if not defined PYW if exist "C:\Users\gxy\miniconda3\pythonw.exe" set "PYW=C:\Users\gxy\miniconda3\pythonw.exe"
+if not defined PYW if exist "D:\FaQ\miniconda3\pythonw.exe" set "PYW=D:\FaQ\miniconda3\pythonw.exe"
 
 if not defined PYW (
     echo [BindX] pythonw.exe not found in PATH or known locations.

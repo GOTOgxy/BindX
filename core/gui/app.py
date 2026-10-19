@@ -76,18 +76,7 @@ class BindXApp(ctk.CTk):
         self._page_sizes = {}
         self._sidebar_tier = None
         self._current_page = "overview"
-        # 缩放窗口的「防卡」状态机：见 _on_host_configure
-        self._curtain_page = None
-        self._curtain_canvas = None
-        self._curtain_image = None
-        self._cfg_burst = 0
-        self._last_cfg_at = 0.0
         self._settle_timer = None
-        self._settling = False
-        # 幕布「武装」开关：启动阶段页面还没画到屏幕上，这时截图会拍到空白，
-        # 所以首次铺完页面后延迟一会儿才允许升幕布（见 _settle_layout 收尾）。
-        self._curtain_armed = False
-        self._curtain_arm_timer = None
         self._host_size = (0, 0)
         self.page_host.bind("<Configure>", self._on_host_configure)
 
@@ -114,6 +103,7 @@ class BindXApp(ctk.CTk):
         self._poll_ui_queue()
         self._window_state_after_id = None
         self._last_persisted_state = None
+        self._last_window_state = self.state()
         self.bind("<Configure>", self._on_window_configure)
 
     def _window_scaling_factor(self):
@@ -199,6 +189,13 @@ class BindXApp(ctk.CTk):
     def _on_window_configure(self, event):
         if event.widget is not self:
             return
+
+        self._sync_sidebar_tier()
+
+        current_state = self.state()
+        if getattr(self, "_last_window_state", None) != current_state:
+            self._last_window_state = current_state
+
         # 拖动窗口时每秒会有上百个 <Configure>：这里只保留一个防抖的
         # 「记住窗口尺寸」任务，不再做任何样式重算，resize 才跟手。
         if self._window_state_after_id is not None:
@@ -275,185 +272,78 @@ class BindXApp(ctk.CTk):
         return btn
 
     def _make_scrollable_page(self):
-        """创建可滚动内容页：内容过高自动滚动，放得下时隐藏滚动条。
-
-        页面不参与宿主的 grid（grid 会按「期望尺寸」反过来撑大窗口，
-        而且拖动窗口时每一步都要重排整页）。改由 _place_page() 用 place
-        钉成固定像素，尺寸只在缩放停手后更新一次。
-        """
+        """创建可滚动内容页：内容过高自动滚动，放得下时隐藏滚动条。"""
         page = AutoHideScrollableFrame(self.page_host, fg_color=self._app_fg_color)
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(0, weight=1)
         self.page_containers.append(page)
         return page
 
-    # ---------------- 窗口缩放：拖动时冻结页面，停手后一次性跟随 ----------------
-    # CTk 控件重绘一次约 3ms（圆角要用 PIL 画好再转 PhotoImage），总览页里有
-    # 上百个控件：边拖边重排实测 ~950ms/帧，窗口跟着鼠标走一步卡一秒。
-    # 现在的做法是
-    #   1) 页面用 place 钉在宿主里，拖动全程尺寸不变、完全不参与重排（~110ms/帧）；
-    #   2) 判定为「交互式拖动」后把页面取消映射，换上它的「定格截图」当幕布：
-    #      重绘成本降到 ~45ms/帧，鼠标走到哪窗口跟到哪，而且画面看着还在，
-    #      不会像纯色幕布那样让人以为软件白屏卡死；
-    #   3) 停手 HOST_SETTLE_MS 后落幕布，一次性铺满新尺寸并重排（只卡这一下）。
-    # 停止缩放多久算「拖完了」。必须明显大于一帧的耗时：拖动时每个
-    # <Configure> 都会把这个定时器往后推，一旦某一帧比它慢（升起幕布要
-    # 拍一张 ~120ms 的截图），定时器就会在拖动途中到点，触发一次整页
-    # 重排（~500ms）—— 用户看到的就是「拖着拖着猛卡一下」。
-    HOST_SETTLE_MS = 240
-    # 第 1 个尺寸变化就升幕布。之前要连击 2 次才升，结果拖动的头两帧仍然
-    # 带着真页面重排：实测 174ms + 233ms，鼠标已经动了窗口内容还跟不上，
-    # 这就是「一开始特别卡」的手感来源。现在头一帧只花一次截图（~95ms），
-    # 之后每帧 ~40ms，整个拖动过程都跟手。
-    # 误判（非拖动的单次尺寸变化，如最大化）也没有副作用：幕布就是页面
-    # 自己的定格截图，看着跟真页面一样，HOST_SETTLE_MS 后自动落下。
-    DRAG_BURST = 1
+    # ---------------- 窗口缩放与响应式布局 ----------------
+    HOST_SETTLE_MS = 50
 
     def _on_host_configure(self, event):
         w, h = event.width, event.height
-        if w < 4 or h < 4:
-            return                      # 启动初期/最小化时的无效尺寸
-        if self._host_size == (w, h):
-            return                      # 只是移动窗口，尺寸没变
+        if w < 4 or h < 4 or self._host_size == (w, h):
+            return                      # 启动初期/无效尺寸或仅移动窗口
         self._host_size = (w, h)
-        if self._settling:
-            # _settle_layout 自己（换侧栏档位 / 铺页面）引发的尺寸变化：
-            # 一律忽略，交给它收尾。若在这里计入连击，就会「落幕布 -> 铺页面
-            # -> 又落幕布」地来回闪。
+        if not hasattr(self, "pages") or self._current_page not in self.pages:
             return
+
         page = self._current_page_widget()
-        if self._curtain_page is None and not page._parent_frame.winfo_ismapped():
-            # 启动 / 切页后页面还没铺上：立刻铺满，别留下 HOST_SETTLE_MS 的白屏
+        if not page._parent_frame.winfo_ismapped():
             self._place_page(page, force=True)
-        now = time.monotonic()
-        # 连击窗口 0.45s：真拖动时 <Configure> 每帧（~16ms）就来一个，
-        # 两下就判定为拖动；窗口取宽一点是为了防止「偶发一帧特别慢 ->
-        # 连击计数被清零 -> 幕布升不起来 -> 每帧都慢」的死循环。
-        self._cfg_burst = self._cfg_burst + 1 if now - self._last_cfg_at < 0.45 else 1
-        self._last_cfg_at = now
-        if self._curtain_armed and self._cfg_burst >= self.DRAG_BURST:
-            self._raise_curtain()
-        if self._settle_timer is not None:
-            self.after_cancel(self._settle_timer)
-        self._settle_timer = self.after(self.HOST_SETTLE_MS, self._settle_layout)
+
+        state = self.state()
+        state_changed = (getattr(self, "_last_settled_state", None) != state)
+        if state_changed:
+            self._last_settled_state = state
+            if self._settle_timer is not None:
+                self.after_cancel(self._settle_timer)
+                self._settle_timer = None
+            self._settle_layout()
+        else:
+            if self._settle_timer is not None:
+                self.after_cancel(self._settle_timer)
+            self._settle_timer = self.after(self.HOST_SETTLE_MS, self._settle_layout)
 
     def _current_page_widget(self):
         return self.pages[self._current_page][0]
 
-    def _raise_curtain(self):
-        """交互式拖动缩放时把当前页面收起来，换成一张「定格截图」。"""
-        if self._curtain_page is not None:
-            return
-        page = self._current_page_widget()
-        self._curtain_page = page
-        try:
-            # 必须在 place_forget 之前截图，否则拍到的是空白宿主
-            self._grab_curtain_snapshot()
-        except Exception:
-            self._hide_curtain()      # 拍不到就退回「纯色幕布」，流程照常走完
-        tk.Frame.place_forget(page._parent_frame)
-
-    def _grab_curtain_snapshot(self):
-        """给页面拍一张静态截图当幕布。
-
-        真页面在拖动期间必须取消映射（上百个 CTk 控件每帧重绘 ~170ms，
-        窗口根本跟不上鼠标），但只留一块纯色背景会让人以为软件白屏卡死。
-        抓一张图顶在上面：拖动全程零重绘、画面「定格」，停手后再无缝换回
-        真页面。截图只在拖动开始时拍一次（~15ms），拍失败就退回纯色幕布。
-        """
-        host = self.page_host
-        canvas = self._curtain_canvas
-        if canvas is None:
-            canvas = tk.Canvas(
-                host, highlightthickness=0, borderwidth=0, bg=host.cget("bg")
-            )
-            self._curtain_canvas = canvas
-        canvas.delete("shot")
-        self._curtain_image = None
-        w, h = self._host_size
-        try:
-            if w > 8 and h > 8:
-                from PIL import ImageGrab, ImageTk
-                x, y = host.winfo_rootx(), host.winfo_rooty()
-                shot = ImageGrab.grab((x, y, x + w, y + h))
-                self._curtain_image = ImageTk.PhotoImage(shot, master=self)
-                canvas.create_image(0, 0, image=self._curtain_image,
-                                    anchor="nw", tags="shot")
-        except Exception:
-            self._curtain_image = None
-        # 原生 tk 的 place 收物理像素；relwidth/relheight=1 让它跟着宿主铺满，
-        # 窗口拉大时截图之外的部分露出宿主背景色。
-        canvas.place(x=0, y=0, relwidth=1.0, relheight=1.0)
-        # 注意不能用 canvas.lift()/canvas.tkraise()：tkinter.Canvas 把这两个
-        # 名字都重绑成了 tag_raise（抬画布里的图元），会直接报 wrong # args。
-        # 要把画布本身抬到页面之上，只能直接调 Tcl 的 raise 命令。
-        canvas.tk.call("raise", canvas._w)
-
-    def _hide_curtain(self):
-        """落幕布：真页面已按新尺寸重排完毕，收掉截图并释放它占的内存。"""
-        canvas = self._curtain_canvas
-        if canvas is None:
-            return
-        canvas.place_forget()
-        canvas.delete("shot")
-        self._curtain_image = None
-
     def _place_page(self, page, force=False):
-        """把页面用 place 钉满宿主（收物理像素），尺寸没变就什么都不做。"""
+        """把页面用固定像素钉满宿主。拖动期间页面保持固定像素尺寸，拖动结束后才跟随铺满。"""
         w, h = self._host_size
         if w < 4 or h < 4:
             w, h = self.page_host.winfo_width(), self.page_host.winfo_height()
             if w < 4 or h < 4:
-                return False            # 宿主还没量出尺寸：等下一次 <Configure>
+                return False
         key = page.winfo_id()
         if not force and self._page_sizes.get(key) == (w, h):
             return False
         self._page_sizes[key] = (w, h)
-        # CTkScrollableFrame.place() 转发给 CTkFrame.place()，而后者禁止传
-        # width/height；这里直接调 tk.Frame.place，收的就是原生物理像素。
-        tk.Frame.place(page._parent_frame, x=0, y=0, width=w, height=h)
+        tk.Frame.place(page._parent_frame, x=0, y=0, width=w, height=h, relwidth="", relheight="")
         return True
 
     def _settle_layout(self):
-        """缩放停手后一次性跟随新尺寸：侧栏档位 -> 页面铺满 -> 重排 -> 折行。"""
-        self._settle_timer = None
-        self._settling = True
-        try:
-            self._cfg_burst = 0
-            # 只有侧栏真的换了档才需要冲刷一次几何：换档会改变宿主尺寸，
-            # 必须等它稳定才能量到最终值。没换档时这一下 update_idletasks
-            # 纯属白等 —— 实测 70~120ms（整棵窗口树的挂起几何都在这里结算），
-            # 是「松手后卡一下」的一大块。
-            if self._sync_sidebar_tier():
-                self.update_idletasks()
-            self._host_size = (self.page_host.winfo_width(), self.page_host.winfo_height())
-            page = self._current_page_widget()
-            curtained = self._curtain_page is not None
-            self._curtain_page = None
-            changed = self._place_page(page, force=True)
-            if not changed and not curtained:
-                return
-            tab = self.pages[self._current_page][1]
-            self.update_idletasks()
-            relayout = getattr(tab, "relayout_now", None)
-            if relayout is not None:
-                relayout()
-                self.update_idletasks()
-        finally:
-            # 页面已按新尺寸铺满并重排完，此刻才收掉定格截图：
-            # 用户看到的是「定格画面 -> 新布局」的一次切换，中间没有空白帧。
-            self._hide_curtain()
-            self._settling = False
-            # 这次重排自己产生的几何事件不能算进「下一次拖动」的连击计数
-            self._cfg_burst = 0
-            self._last_cfg_at = time.monotonic()
-            if not self._curtain_armed and self._curtain_arm_timer is None:
-                self._curtain_arm_timer = self.after(400, self._arm_curtain)
-
-    def _arm_curtain(self):
-        """页面已经真正画到屏幕上，从此允许用「定格截图」代替真页面。"""
-        self._curtain_arm_timer = None
-        self._curtain_armed = True
+        """缩放停止或状态切换后结算布局：侧栏档位 -> 页面铺满 -> 页面重排。"""
+        if getattr(self, "_settle_timer", None) is not None:
+            try:
+                self.after_cancel(self._settle_timer)
+            except Exception:
+                pass
+            self._settle_timer = None
+        if not hasattr(self, "pages") or self._current_page not in self.pages:
+            return
+        self._sync_sidebar_tier()
+        w, h = self.page_host.winfo_width(), self.page_host.winfo_height()
+        if w >= 4 and h >= 4:
+            self._host_size = (w, h)
+        page = self._current_page_widget()
+        self._place_page(page, force=True)
+        tab = self.pages[self._current_page][1]
+        relayout = getattr(tab, "relayout_now", None)
+        if relayout is not None:
+            relayout()
 
     def _sync_sidebar_tier(self):
         """窗口越窄侧栏越窄，把横向空间尽量让给内容区。
@@ -478,15 +368,14 @@ class BindXApp(ctk.CTk):
 
     def _show_page(self, name):
         # 只让当前页参与布局：其余两页 place_forget（取消映射、不占几何）。
-        # 三个页原本叠在同一个宿主里，缩放窗口时每次都要重排三页
-        # （含两个表格页），这是 resize 卡顿的主要原因。
         self._current_page = name
-        self._curtain_page = None
-        self._hide_curtain()
-        for key, (page, _tab) in self.pages.items():
+        for key, (page, tab) in self.pages.items():
             if key == name:
                 self._place_page(page, force=True)
                 page._parent_frame.lift()
+                relayout = getattr(tab, "relayout_now", None)
+                if relayout is not None:
+                    relayout()
             else:
                 self._page_sizes.pop(page.winfo_id(), None)
                 tk.Frame.place_forget(page._parent_frame)
