@@ -133,8 +133,50 @@
             </div>
           </div>
 
+          <!-- KPI Metrics Row -->
+          <div class="kpi-row">
+            <div class="glass-panel kpi-card">
+              <div class="kpi-icon-wrap hotkey-accent">
+                <Keyboard class="w-5 h-5 text-indigo-500" />
+              </div>
+              <div class="kpi-info">
+                <span class="kpi-label">已配置快捷键</span>
+                <div class="kpi-value-row">
+                  <span class="kpi-value">{{ config.hotkeys.entries.length }}</span>
+                  <span class="kpi-unit">个规则 (已启用 {{ activeHotkeysCount }})</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="glass-panel kpi-card">
+              <div class="kpi-icon-wrap remap-accent">
+                <MousePointer class="w-5 h-5 text-pink-500" />
+              </div>
+              <div class="kpi-info">
+                <span class="kpi-label">输入重映射规则</span>
+                <div class="kpi-value-row">
+                  <span class="kpi-value">{{ config.mouse.mouse_mappings.length + config.mouse.mappings.length }}</span>
+                  <span class="kpi-unit">个规则 (侧键 + 按键宏)</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="glass-panel kpi-card">
+              <div class="kpi-icon-wrap cloud-accent">
+                <Cloud class="w-5 h-5 text-cyan-500" />
+              </div>
+              <div class="kpi-info">
+                <span class="kpi-label">WebDAV 云漫游</span>
+                <div class="kpi-value-row">
+                  <span class="kpi-status-dot" :class="config.webdav.server_url ? 'online' : 'offline'"></span>
+                  <span class="kpi-text-val">{{ config.webdav.server_url ? '自建服务已连接' : '未配置服务' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Hero Engine Cards -->
-          <div class="grid-cards">
+          <div class="grid-cards mt-5">
             <!-- App Hotkey Engine Card -->
             <div class="glass-panel glass-panel-hover engine-card">
               <div class="card-header">
@@ -144,7 +186,7 @@
                   </div>
                   <div>
                     <h3>应用呼出与切换引擎</h3>
-                    <p>原生 Win32 RegisterHotKey 低功耗消息泵</p>
+                    <p>原生 Win32 RegisterHotKey 低功耗系统消息泵</p>
                   </div>
                 </div>
                 <label class="toggle-switch">
@@ -156,19 +198,20 @@
               <div class="card-body">
                 <div class="stat-row">
                   <span class="stat-name">激活规则总数</span>
-                  <span class="stat-value">{{ activeHotkeysCount }} / {{ config.hotkeys.entries.length }}</span>
+                  <span class="stat-value">{{ activeHotkeysCount }} / {{ config.hotkeys.entries.length }} 项有效运行</span>
                 </div>
                 <div class="stat-row">
                   <span class="stat-name">引擎调度状态</span>
                   <span class="status-tag" :class="config.app.hotkey_running ? 'online' : 'offline'">
-                    {{ config.app.hotkey_running ? '正在捕获全局快捷键' : '已暂停' }}
+                    {{ config.app.hotkey_running ? '正在捕获全局快捷键' : '已暂停服务' }}
                   </span>
                 </div>
               </div>
 
               <div class="card-footer">
                 <button class="btn btn-secondary w-full" @click="currentTab = 'hotkeys'">
-                  管理快捷键规则 →
+                  <span>管理快捷键规则列表</span>
+                  <ArrowRight class="w-4 h-4 ml-1" />
                 </button>
               </div>
             </div>
@@ -181,8 +224,8 @@
                     <MousePointer class="w-5 h-5 text-white" />
                   </div>
                   <div>
-                    <h3>底层输入与鼠标重映射</h3>
-                    <p>WH_MOUSE_LL / WH_KEYBOARD_LL 事件分派</p>
+                    <h3>底层硬件与鼠标重映射</h3>
+                    <p>WH_MOUSE_LL / WH_KEYBOARD_LL 高精度底层钩子分派</p>
                   </div>
                 </div>
                 <label class="toggle-switch">
@@ -193,48 +236,80 @@
 
               <div class="card-body">
                 <div class="stat-row">
-                  <span class="stat-name">侧键映射规则</span>
+                  <span class="stat-name">鼠标侧键 (X1/X2)</span>
                   <span class="stat-value">{{ config.mouse.mouse_mappings.length }} 项已配置</span>
                 </div>
                 <div class="stat-row">
-                  <span class="stat-name">按键宏规则</span>
+                  <span class="stat-name">键盘宏映射规则</span>
                   <span class="stat-value">{{ config.mouse.mappings.length }} 项已配置</span>
                 </div>
               </div>
 
               <div class="card-footer">
                 <button class="btn btn-secondary w-full" @click="currentTab = 'remap'">
-                  配置重映射规则 →
+                  <span>配置重映射与按键宏</span>
+                  <ArrowRight class="w-4 h-4 ml-1" />
                 </button>
               </div>
             </div>
           </div>
 
-          <!-- Quick WebDAV Sync & Update Card -->
-          <div class="grid-cards mt-4">
-            <div class="glass-panel p-4 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <Cloud class="w-6 h-6 text-indigo-400" />
+          <!-- Bottom Integrations Section -->
+          <div class="grid-cards mt-5">
+            <!-- WebDAV Quick Card -->
+            <div class="glass-panel integration-card">
+              <div class="integration-header">
+                <div class="integration-icon-wrap cloud-wrap">
+                  <Cloud class="w-5 h-5 text-cyan-500" />
+                </div>
                 <div>
-                  <h4 class="font-medium text-slate-100">WebDAV 配置同步</h4>
-                  <p class="text-xs text-slate-400">跨设备同步配置 JSON，告别复杂 Git 仓库与本地上传</p>
+                  <h4 class="integration-title">WebDAV 云端配置漫游</h4>
+                  <p class="integration-desc">跨设备安全同步 JSON 配置，自动维护远程目录</p>
                 </div>
               </div>
-              <div class="flex gap-2">
+              <div class="integration-meta">
+                <div class="meta-item">
+                  <span class="meta-label">服务器地址</span>
+                  <span class="meta-val font-mono">{{ config.webdav.server_url || '尚未配置' }}</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">云端目录</span>
+                  <span class="meta-val font-mono">{{ config.webdav.remote_filename || '未设置' }}</span>
+                </div>
+              </div>
+              <div class="integration-actions">
+                <button class="btn btn-primary" :disabled="downloadingWebDav" @click="onDownloadWebDav">
+                  <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': downloadingWebDav }" />
+                  <span>立即同步</span>
+                </button>
                 <button class="btn btn-secondary" @click="currentTab = 'webdav'">进入同步中心</button>
               </div>
             </div>
 
-            <div class="glass-panel p-4 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <DownloadCloud class="w-6 h-6 text-emerald-400" />
+            <!-- Client Environment Card -->
+            <div class="glass-panel integration-card">
+              <div class="integration-header">
+                <div class="integration-icon-wrap update-wrap">
+                  <ShieldCheck class="w-5 h-5 text-indigo-500" />
+                </div>
                 <div>
-                  <h4 class="font-medium text-slate-100">软件下载与版本更新</h4>
-                  <p class="text-xs text-slate-400">当前版本: v2.0.0 (Native Rust + WebUI)</p>
+                  <h4 class="integration-title">BindX 纯原生分发架构</h4>
+                  <p class="integration-desc">Windows x64 原生单文件 EXE，零外部运行环境依赖</p>
                 </div>
               </div>
-              <div class="flex gap-2">
-                <button class="btn btn-secondary" @click="currentTab = 'update'">检查更新</button>
+              <div class="integration-meta">
+                <div class="meta-item">
+                  <span class="meta-label">当前运行版本</span>
+                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.0 Native</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">Windows 开机自启</span>
+                  <span class="meta-val">{{ config.app.autostart_enabled ? '已开启自动驻留' : '未开启' }}</span>
+                </div>
+              </div>
+              <div class="integration-actions">
+                <button class="btn btn-secondary" @click="onCheckUpdate">检查在线更新</button>
+                <button class="btn btn-secondary" @click="currentTab = 'settings'">偏好设置</button>
               </div>
             </div>
           </div>
@@ -314,76 +389,114 @@
           <div class="pane-header">
             <div>
               <h2>按键与鼠标重映射</h2>
-              <p class="subtitle">将鼠标侧键（前进/后退）或按键组合映射为一键快捷键操作</p>
+              <p class="subtitle">将鼠标硬件侧键（前进/后退）或键盘组合键映射为高频快捷键或按键宏</p>
             </div>
             <div class="actions">
-              <button class="btn btn-primary" @click="saveAll">保存并应用</button>
+              <button class="btn btn-primary" @click="saveAll">保存所有重映射</button>
             </div>
           </div>
 
-          <!-- Mouse Side Buttons -->
-          <div class="section-box">
-            <h3 class="section-title flex items-center gap-2">
-              <MousePointer class="w-4 h-4 text-cyan-400" />
-              鼠标侧键映射 (X1 / X2)
-            </h3>
-            
-            <div class="grid-cards">
+          <!-- Section 1: Mouse Side Buttons Card -->
+          <div class="glass-panel remap-section-card">
+            <div class="section-card-header">
+              <div class="card-icon-title">
+                <div class="section-icon-wrap mouse-wrap">
+                  <MousePointer class="w-5 h-5 text-pink-500" />
+                </div>
+                <div>
+                  <h3 class="section-title">鼠标硬件侧键映射 (X1 / X2)</h3>
+                  <p class="section-desc">基于 Win32 WH_MOUSE_LL 底层钩子精准捕获侧键点击，静默转换为键盘组合</p>
+                </div>
+              </div>
+              <div class="engine-badge-pill" :class="{ active: config.app.mouse_running }">
+                <span class="dot"></span>
+                <span>鼠标引擎: {{ config.app.mouse_running ? '正常运行' : '已暂停' }}</span>
+              </div>
+            </div>
+
+            <div class="mouse-cards-grid">
               <div 
                 v-for="(m, idx) in config.mouse.mouse_mappings" 
                 :key="idx" 
-                class="glass-panel p-4 flex flex-col gap-3"
+                class="mouse-tile-card"
               >
-                <div class="flex items-center justify-between">
-                  <div class="flex items-center gap-2">
-                    <span class="keycap">{{ m.button.toUpperCase() }}</span>
-                    <span class="text-sm font-medium">{{ m.description || '鼠标侧键' }}</span>
+                <div class="mouse-tile-top">
+                  <div class="mouse-badge-group">
+                    <span class="keycap mouse-keycap">{{ m.button.toUpperCase() }}</span>
+                    <div>
+                      <span class="mouse-btn-name">{{ m.button.toUpperCase() === 'X1' ? '后退侧键 (XButton 1)' : '前进侧键 (XButton 2)' }}</span>
+                      <span class="mouse-btn-desc">{{ m.description || (m.button.toUpperCase() === 'X1' ? '默认关闭标签页 (Ctrl+W)' : '前进行为') }}</span>
+                    </div>
                   </div>
-                  <label class="toggle-switch mini">
+                  <label class="toggle-switch">
                     <input type="checkbox" v-model="m.enabled" @change="saveAll" />
                     <span class="slider"></span>
                   </label>
                 </div>
 
-                <div class="flex items-center gap-2">
-                  <span class="text-xs text-slate-400">输出按键:</span>
-                  <div class="flex gap-1">
-                    <span v-for="k in m.output" :key="k" class="keycap">{{ k.toUpperCase() }}</span>
+                <div class="mouse-mapping-flow">
+                  <div class="flow-step">
+                    <span class="flow-label">触发硬件</span>
+                    <span class="keycap">{{ m.button.toUpperCase() }} 侧键</span>
+                  </div>
+                  <div class="flow-arrow">
+                    <ArrowRight class="w-4 h-4 text-slate-400" />
+                  </div>
+                  <div class="flow-step">
+                    <span class="flow-label">映射输出</span>
+                    <div class="flex gap-1.5 flex-wrap">
+                      <span v-for="k in m.output" :key="k" class="keycap accent">{{ k.toUpperCase() }}</span>
+                    </div>
                   </div>
                 </div>
 
-                <div class="flex items-center gap-2 pt-2 border-t border-slate-700/50">
+                <div class="mouse-input-row">
                   <input 
                     type="text" 
-                    class="input-field text-xs" 
-                    placeholder="输入按键组合, 空格或逗号分隔 (如 ctrl w)"
+                    class="input-field mouse-input" 
+                    placeholder="输入按键组合, 如 ctrl w 或 alt left"
                     :value="m.output.join(' ')"
                     @change="e => updateMouseOutput(m, e.target.value)"
                   />
+                </div>
+
+                <!-- Quick Presets -->
+                <div class="quick-presets">
+                  <span class="preset-hint">快速应用：</span>
+                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['ctrl', 'w'])">Ctrl+W (关闭标签)</button>
+                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['ctrl', 't'])">Ctrl+T (新建标签)</button>
+                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['alt', 'left'])">Alt+Left (后退)</button>
+                  <button type="button" class="preset-tag" @click="setMousePreset(m, ['win', 'd'])">Win+D (桌面)</button>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Keyboard Remap Rules -->
-          <div class="section-box mt-6">
-            <div class="flex items-center justify-between mb-3">
-              <h3 class="section-title flex items-center gap-2">
-                <Keyboard class="w-4 h-4 text-indigo-400" />
-                键盘按键宏组合重映射
-              </h3>
+          <!-- Section 2: Keyboard Macro Remap Card -->
+          <div class="glass-panel remap-section-card mt-6">
+            <div class="section-card-header">
+              <div class="card-icon-title">
+                <div class="section-icon-wrap key-wrap">
+                  <Keyboard class="w-5 h-5 text-indigo-500" />
+                </div>
+                <div>
+                  <h3 class="section-title">键盘按键宏组合重映射</h3>
+                  <p class="section-desc">将任意键盘组合拦截并转换分发为另一组目标按键，突破常规软件限制</p>
+                </div>
+              </div>
               <button class="btn btn-secondary text-xs" @click="addKeyMapping">+ 添加按键重映射</button>
             </div>
 
-            <div class="glass-panel overflow-hidden">
+            <div class="overflow-hidden rounded-xl border border-color">
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th style="width: 70px;">状态</th>
-                    <th>触发组合</th>
-                    <th>映射输出</th>
-                    <th>描述</th>
-                    <th style="width: 80px;">操作</th>
+                    <th style="width: 80px;">状态</th>
+                    <th>触发原始组合</th>
+                    <th style="width: 40px; text-align: center;"></th>
+                    <th>映射输出目标</th>
+                    <th>规则描述</th>
+                    <th style="width: 90px; text-align: center;">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -395,27 +508,30 @@
                       </label>
                     </td>
                     <td>
-                      <div class="flex gap-1">
+                      <div class="flex gap-1.5 items-center">
                         <span v-for="k in km.trigger" :key="k" class="keycap">{{ k.toUpperCase() }}</span>
                       </div>
                     </td>
+                    <td style="text-align: center;">
+                      <ArrowRight class="w-4 h-4 text-slate-400 inline-block" />
+                    </td>
                     <td>
-                      <div class="flex gap-1">
-                        <span v-for="k in km.output" :key="k" class="keycap text-indigo-400">{{ k.toUpperCase() }}</span>
+                      <div class="flex gap-1.5 items-center">
+                        <span v-for="k in km.output" :key="k" class="keycap accent">{{ k.toUpperCase() }}</span>
                       </div>
                     </td>
                     <td>
-                      <span class="text-xs text-slate-400">{{ km.description }}</span>
+                      <span class="text-xs text-secondary font-medium">{{ km.description }}</span>
                     </td>
-                    <td>
-                      <button class="btn-icon danger" @click="deleteKeyMapping(idx)">
+                    <td style="text-align: center;">
+                      <button class="btn-icon danger mx-auto" title="删除重映射规则" @click="deleteKeyMapping(idx)">
                         <Trash2 class="w-3.5 h-3.5" />
                       </button>
                     </td>
                   </tr>
                   <tr v-if="config.mouse.mappings.length === 0">
-                    <td colspan="5" class="text-center py-6 text-slate-500 text-xs">
-                      暂无按键重映射规则，点击右上角添加
+                    <td colspan="6" class="text-center py-8 text-muted text-xs">
+                      暂无按键宏重映射规则，点击右上角 “+ 添加按键重映射” 即可创建
                     </td>
                   </tr>
                 </tbody>
@@ -428,102 +544,197 @@
         <div v-if="currentTab === 'webdav'" class="tab-pane">
           <div class="pane-header">
             <div>
-              <h2>WebDAV 云端同步</h2>
-              <p class="subtitle">支持坚果云 (Nutstore)、Nextcloud、Alist、群晖 NAS 等标准 WebDAV 服务器</p>
+              <h2>WebDAV 云端同步工作台</h2>
+              <p class="subtitle">支持坚果云 (Nutstore)、Nextcloud、Alist、自建服务器等标准 WebDAV 协议</p>
             </div>
             <div class="actions">
               <button class="btn btn-secondary" :disabled="testingWebDav" @click="onTestWebDav">
-                {{ testingWebDav ? '正在测试...' : '测试连接' }}
-              </button>
-              <button class="btn btn-secondary" :disabled="uploadingWebDav" @click="onUploadWebDav">
-                {{ uploadingWebDav ? '上传中...' : '上传备份配置' }}
+                <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': testingWebDav }" />
+                <span>{{ testingWebDav ? '测试中...' : '测试连接' }}</span>
               </button>
               <button class="btn btn-primary" :disabled="downloadingWebDav" @click="onDownloadWebDav">
-                {{ downloadingWebDav ? '同步中...' : '从云端同步下载' }}
+                <DownloadCloud class="w-3.5 h-3.5" :class="{ 'animate-spin': downloadingWebDav }" />
+                <span>{{ downloadingWebDav ? '同步中...' : '从云端同步下载' }}</span>
               </button>
             </div>
           </div>
 
-          <div class="glass-panel p-6 max-w-2xl">
-            <!-- Fast presets -->
-            <div class="mb-5 pb-4 border-b border-slate-700/60">
-              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">快速填入推荐服务商：</label>
-              <div class="flex flex-wrap gap-2">
-                <button class="btn btn-secondary text-xs" @click="applyWebDavPreset('custom_server')">★ 我的自建服务器 (175.178.147.236)</button>
-                <button class="btn btn-secondary text-xs" @click="applyWebDavPreset('jianguoyun')">坚果云 (Nutstore)</button>
-                <button class="btn btn-secondary text-xs" @click="applyWebDavPreset('alist')">Alist 本地/远程</button>
-                <button class="btn btn-secondary text-xs" @click="applyWebDavPreset('nextcloud')">Nextcloud</button>
+          <div class="webdav-dashboard-grid">
+            <!-- Left: Server Configuration Card -->
+            <div class="glass-panel webdav-card">
+              <div class="card-section-header">
+                <div class="card-icon-title">
+                  <div class="section-icon-wrap webdav-blue">
+                    <Server class="w-5 h-5 text-indigo-500" />
+                  </div>
+                  <div>
+                    <h3 class="card-title">WebDAV 服务器连接凭据</h3>
+                    <p class="card-subtitle">安全保存云端访问地址与鉴权凭据，配置自动加密本地缓存</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Fast presets chips -->
+              <div class="preset-section">
+                <span class="preset-label">快速导入常用服务商配置：</span>
+                <div class="preset-chips">
+                  <button type="button" class="preset-chip active" @click="applyWebDavPreset('custom_server')">
+                    <span class="preset-star">★</span> 我的自建服务 (175.178.147.236)
+                  </button>
+                  <button type="button" class="preset-chip" @click="applyWebDavPreset('jianguoyun')">坚果云 (Nutstore)</button>
+                  <button type="button" class="preset-chip" @click="applyWebDavPreset('alist')">Alist 挂载盘</button>
+                  <button type="button" class="preset-chip" @click="applyWebDavPreset('nextcloud')">Nextcloud</button>
+                </div>
+              </div>
+
+              <div class="form-grid">
+                <div class="form-item col-span-2">
+                  <label class="form-label">WebDAV 服务器根 URL</label>
+                  <input 
+                    type="text" 
+                    class="input-field" 
+                    placeholder="http://175.178.147.236:7779/"
+                    v-model="config.webdav.server_url" 
+                  />
+                  <span class="field-hint">根地址示例: http://175.178.147.236:7779/ 或 https://dav.jianguoyun.com/dav/</span>
+                </div>
+
+                <div class="form-item">
+                  <label class="form-label">账户用户名 / 邮箱</label>
+                  <input 
+                    type="text" 
+                    class="input-field" 
+                    placeholder="gxy"
+                    v-model="config.webdav.username" 
+                  />
+                </div>
+
+                <div class="form-item">
+                  <label class="form-label">密码 / 应用专属授权码</label>
+                  <div class="password-input-wrapper">
+                    <input 
+                      :type="showPassword ? 'text' : 'password'" 
+                      class="input-field password-input" 
+                      placeholder="••••••••••••"
+                      v-model="config.webdav.password" 
+                    />
+                    <button 
+                      type="button" 
+                      class="eye-btn"
+                      title="切换显示/隐藏密码"
+                      @click="showPassword = !showPassword"
+                    >
+                      <Eye v-if="!showPassword" class="w-4 h-4" />
+                      <EyeOff v-else class="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div class="form-item col-span-2">
+                  <label class="form-label">云端存储路径（自动维护子目录）</label>
+                  <input 
+                    type="text" 
+                    class="input-field font-mono" 
+                    placeholder="bindx/bindx_config.json"
+                    v-model="config.webdav.remote_filename" 
+                  />
+                  <span class="field-hint">输入 <code>bindx/bindx_config.json</code>，BindX 会在 WebDAV 根目录自动创建 <code>/bindx/</code> 文件夹并存入配置</span>
+                </div>
+
+                <div class="form-item col-span-2 flex items-center justify-between pt-2">
+                  <div>
+                    <span class="font-medium text-sm text-main">启动时自动同步云端配置</span>
+                    <p class="text-xs text-muted">软件开机静默启动后，自动拉取最新的云端配置并热更新生效</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="config.webdav.auto_sync_on_startup" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="card-footer-actions">
+                <button class="btn btn-primary" @click="saveAll">保存 WebDAV 凭据</button>
               </div>
             </div>
 
-            <div class="form-grid">
-              <div class="form-item col-span-2">
-                <label class="form-label">WebDAV 服务器 URL</label>
-                <input 
-                  type="text" 
-                  class="input-field" 
-                  placeholder="http://175.178.147.236:7779/"
-                  v-model="config.webdav.server_url" 
-                />
-                <span class="field-hint">根地址示例: http://175.178.147.236:7779/ 或 https://dav.jianguoyun.com/dav/</span>
+            <!-- Right: Operations & Status Card -->
+            <div class="glass-panel webdav-card webdav-ops-card">
+              <div class="card-section-header">
+                <div class="card-icon-title">
+                  <div class="section-icon-wrap cloud-blue">
+                    <Cloud class="w-5 h-5 text-cyan-500" />
+                  </div>
+                  <div>
+                    <h3 class="card-title">配置同步操作面板</h3>
+                    <p class="card-subtitle">双向同步本地与云端 WebDAV 配置文件</p>
+                  </div>
+                </div>
               </div>
 
-              <div class="form-item">
-                <label class="form-label">用户名 / 账号邮箱</label>
-                <input 
-                  type="text" 
-                  class="input-field" 
-                  placeholder="gxy"
-                  v-model="config.webdav.username" 
-                />
+              <!-- Live Sync Status Banner -->
+              <div class="sync-status-box">
+                <div class="sync-status-row">
+                  <span class="sync-label">服务器就绪状态:</span>
+                  <span class="status-tag" :class="config.webdav.server_url ? 'online' : 'offline'">
+                    {{ config.webdav.server_url ? '已就绪' : '未配置服务' }}
+                  </span>
+                </div>
+                <div class="sync-status-row">
+                  <span class="sync-label">云端目录位置:</span>
+                  <span class="font-mono text-xs text-main">/bindx/</span>
+                </div>
+                <div class="sync-status-row">
+                  <span class="sync-label">完整远程路径:</span>
+                  <span class="font-mono text-xs text-muted truncate" :title="resolvedWebDavUrl">
+                    {{ resolvedWebDavUrl || '尚未配置' }}
+                  </span>
+                </div>
               </div>
 
-              <div class="form-item">
-                <label class="form-label">密码 / 应用专属授权码</label>
-                <div class="password-input-wrapper">
-                  <input 
-                    :type="showPassword ? 'text' : 'password'" 
-                    class="input-field password-input" 
-                    placeholder="••••••••••••"
-                    v-model="config.webdav.password" 
-                  />
-                  <button 
-                    type="button" 
-                    class="eye-btn"
-                    title="切换显示/隐藏密码"
-                    @click="showPassword = !showPassword"
-                  >
-                    <Eye v-if="!showPassword" class="w-4 h-4" />
-                    <EyeOff v-else class="w-4 h-4" />
+              <!-- Action Buttons with clear descriptions -->
+              <div class="sync-actions-list">
+                <div class="sync-action-item">
+                  <div class="sync-action-desc">
+                    <span class="sync-action-title">测试连接性</span>
+                    <span class="sync-action-sub">测试 WebDAV 根地址连通性与账号凭据</span>
+                  </div>
+                  <button class="btn btn-secondary" :disabled="testingWebDav" @click="onTestWebDav">
+                    <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': testingWebDav }" />
+                    <span>{{ testingWebDav ? '测试中...' : '测试连接' }}</span>
+                  </button>
+                </div>
+
+                <div class="sync-action-item">
+                  <div class="sync-action-desc">
+                    <span class="sync-action-title">上传备份至云端</span>
+                    <span class="sync-action-sub">将当前本地配置保存至 WebDAV /bindx/ 目录</span>
+                  </div>
+                  <button class="btn btn-secondary" :disabled="uploadingWebDav" @click="onUploadWebDav">
+                    <Upload class="w-3.5 h-3.5" :class="{ 'animate-spin': uploadingWebDav }" />
+                    <span>{{ uploadingWebDav ? '上传中...' : '立即上传' }}</span>
+                  </button>
+                </div>
+
+                <div class="sync-action-item highlight">
+                  <div class="sync-action-desc">
+                    <span class="sync-action-title">从云端同步下载</span>
+                    <span class="sync-action-sub">拉取远端配置并立即热重载当前按键规则</span>
+                  </div>
+                  <button class="btn btn-primary" :disabled="downloadingWebDav" @click="onDownloadWebDav">
+                    <DownloadCloud class="w-3.5 h-3.5" :class="{ 'animate-spin': downloadingWebDav }" />
+                    <span>{{ downloadingWebDav ? '同步中...' : '立即下载' }}</span>
                   </button>
                 </div>
               </div>
 
-              <div class="form-item col-span-2">
-                <label class="form-label">云端存储路径（自动维护子目录）</label>
-                <input 
-                  type="text" 
-                  class="input-field" 
-                  placeholder="bindx/bindx_config.json"
-                  v-model="config.webdav.remote_filename" 
-                />
-                <span class="field-hint">输入 <code>bindx/bindx_config.json</code> 会在 WebDAV 根目录下自动创建 <code>/bindx/</code> 文件夹并存入配置</span>
+              <!-- Informative hint box -->
+              <div class="distribution-tip mt-auto">
+                <div class="font-medium text-main text-xs mb-1">WebDAV 漫游优势：</div>
+                <p class="text-xs text-muted leading-relaxed">
+                  通过私有 WebDAV 服务器，您可以在多台办公室或家用电脑之间无缝漫游快捷键配置。无需第三方公网注册，数据完全私有掌控。
+                </p>
               </div>
-
-              <div class="form-item flex items-center justify-between pt-6">
-                <div>
-                  <span class="font-medium text-sm text-slate-200">启动时自动同步云端</span>
-                  <p class="text-xs text-slate-400">软件开机启动后自动检查拉取最新的配置</p>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" v-model="config.webdav.auto_sync_on_startup" />
-                  <span class="slider"></span>
-                </label>
-              </div>
-            </div>
-
-            <div class="mt-6 pt-4 border-t border-slate-700/60 flex justify-end">
-              <button class="btn btn-primary" @click="saveAll">保存 WebDAV 凭据</button>
             </div>
           </div>
         </div>
@@ -533,44 +744,66 @@
           <div class="pane-header">
             <div>
               <h2>软件版本与下载中心</h2>
-              <p class="subtitle">客户端纯净下载机制，告别繁重复杂的 Git 本地源码上传与管理</p>
+              <p class="subtitle">客户端纯净下载机制，告别繁重复杂的 Git 本地源码上传与版本冲突</p>
             </div>
             <div class="actions">
               <button class="btn btn-primary" :disabled="checkingUpdate" @click="onCheckUpdate">
-                {{ checkingUpdate ? '正在检查...' : '检查最新版本' }}
+                <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': checkingUpdate }" />
+                <span>{{ checkingUpdate ? '正在检查...' : '检查最新版本' }}</span>
               </button>
             </div>
           </div>
 
-          <div class="grid-cards max-w-3xl">
-            <div class="glass-panel p-6 flex flex-col gap-4">
-              <div class="flex items-center justify-between pb-4 border-b border-slate-700/60">
-                <div class="flex items-center gap-3">
-                  <div class="w-12 h-12 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-lg">
+          <div class="update-dashboard-grid">
+            <!-- Left: Version Checker Hero Card -->
+            <div class="glass-panel version-hero-card">
+              <div class="hero-header-box">
+                <div class="flex items-center gap-3.5">
+                  <div class="hero-icon-box">
                     <Sparkles class="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h3 class="text-lg font-semibold text-slate-100">BindX Native Edition</h3>
-                    <p class="text-xs text-slate-400">当前运行版本: <span class="text-cyan-400 font-mono font-medium">v2.0.0</span></p>
+                    <h3 class="hero-title">BindX Native Edition</h3>
+                    <p class="hero-ver">当前运行版本: <span class="font-mono font-semibold text-indigo-600">v2.0.0 Native</span></p>
                   </div>
                 </div>
                 <div>
                   <span v-if="updateInfo && updateInfo.has_update" class="update-badge has-update">发现新版本</span>
-                  <span v-else-if="updateInfo" class="update-badge latest">已是最新版</span>
+                  <span v-else class="update-badge latest">已是最新版</span>
+                </div>
+              </div>
+
+              <!-- Architecture Specs List -->
+              <div class="hero-specs-list">
+                <div class="spec-row">
+                  <span class="spec-name">运行架构</span>
+                  <span class="spec-val">Windows x64 Native (Rust + Tauri)</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-name">分发规格</span>
+                  <span class="spec-val">单一独立免安装 EXE (零外部依赖)</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-name">运行时内存</span>
+                  <span class="spec-val">~15MB 超轻量系统资源占用</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-name">底层消息捕获</span>
+                  <span class="spec-val">Win32 RegisterHotKey + LL-Hook</span>
                 </div>
               </div>
 
               <!-- Update Details if available -->
               <div v-if="updateInfo && updateInfo.has_update" class="update-card-content">
                 <div class="flex items-baseline justify-between mb-2">
-                  <h4 class="text-base font-semibold text-indigo-300">
+                  <h4 class="text-base font-semibold text-indigo-600">
                     最新版本: {{ updateInfo.latest_version }} ({{ updateInfo.release_name }})
                   </h4>
-                  <span class="text-xs text-slate-400">{{ updateInfo.published_at }}</span>
+                  <span class="text-xs text-muted">{{ updateInfo.published_at }}</span>
                 </div>
 
                 <div class="changelog-box">
-                  <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">更新日志：</div>
+                  <div class="text-xs font-semibold text-secondary uppercase tracking-wider mb-1">更新日志：</div>
                   <pre class="changelog-text">{{ updateInfo.release_notes || '无详细更新说明' }}</pre>
                 </div>
 
@@ -586,18 +819,69 @@
               </div>
 
               <!-- If already latest or not checked -->
-              <div v-else class="py-4 text-center text-slate-400 text-sm">
-                <p v-if="!updateInfo">点击上方按钮，检查云端是否有更高版本发布。</p>
-                <p v-else class="text-emerald-400">当前版本已是最新，无需更新！</p>
+              <div v-else class="py-4 text-center text-muted text-sm flex flex-col items-center gap-2">
+                <div class="flex items-center gap-2 text-emerald-600 font-medium">
+                  <CheckCircle2 class="w-4 h-4" />
+                  <span>当前版本已是最新，无需更新！</span>
+                </div>
+                <p class="text-xs text-dim">点击右上角按钮可重新查询远程分发通道的更新日志与发布版本。</p>
               </div>
 
-              <!-- Distribution Design Explanation Note -->
-              <div class="distribution-tip">
-                <div class="font-medium text-slate-300 text-xs mb-1">分发机制说明：</div>
-                <p class="text-xs text-slate-400 leading-relaxed">
-                  按照您的设计调整，客户端已彻底移除 Git 源码上传功能，仅保留下载和更新分发入口。
-                  软件打包为单一绿色免安装 exe，无需在目标机器配置 Python 环境或依赖库。
-                </p>
+              <!-- Direct Check Button -->
+              <div class="pt-2">
+                <button class="btn btn-secondary w-full" :disabled="checkingUpdate" @click="onCheckUpdate">
+                  <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': checkingUpdate }" />
+                  <span>{{ checkingUpdate ? '正在连接远程分发服务...' : '重新检查更新' }}</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Right: Distribution Architecture Explanations -->
+            <div class="glass-panel arch-cards-panel">
+              <div class="card-section-header">
+                <div class="card-icon-title">
+                  <div class="section-icon-wrap system-wrap">
+                    <ShieldCheck class="w-5 h-5 text-indigo-500" />
+                  </div>
+                  <div>
+                    <h3 class="card-title">新一代软件分发与架构演进</h3>
+                    <p class="card-subtitle">彻底重塑轻量客户端的分发体验</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="arch-tiles-list">
+                <div class="arch-tile">
+                  <div class="arch-icon">🚀</div>
+                  <div>
+                    <h4 class="arch-title">客户端剥离 Git 源码依赖</h4>
+                    <p class="arch-desc">客户端不再提供源码级 Git 上传功能，仅保留纯净下载与版本检查通道，避免版本混乱与配置覆盖冲突。</p>
+                  </div>
+                </div>
+
+                <div class="arch-tile">
+                  <div class="arch-icon">☁️</div>
+                  <div>
+                    <h4 class="arch-title">配置与二进制程序彻底解耦</h4>
+                    <p class="arch-desc">所有用户快捷键配置交由私有 WebDAV 托管漫游，无论软件如何升级迭代，个人自定义配置永不丢失。</p>
+                  </div>
+                </div>
+
+                <div class="arch-tile">
+                  <div class="arch-icon">📦</div>
+                  <div>
+                    <h4 class="arch-title">单文件绿色便携部署</h4>
+                    <p class="arch-desc">编译打包为独立单一的 bindx.exe，双击即可直接运行，无任何 Python 运行时、无额外 DLL 安装包依赖。</p>
+                  </div>
+                </div>
+
+                <div class="arch-tile">
+                  <div class="arch-icon">🖥️</div>
+                  <div>
+                    <h4 class="arch-title">原生 Win32 低损耗调度</h4>
+                    <p class="arch-desc">使用底层操作系统消息队列，极低 CPU 占用与内存驻留，全天候在后台静默运行亦毫无负担。</p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -608,101 +892,153 @@
           <div class="pane-header">
             <div>
               <h2>通用偏好设置</h2>
-              <p class="subtitle">调整 Windows 系统集成、延迟阈值与交互方式</p>
+              <p class="subtitle">调整 Windows 系统集成、界面外观与底层按键模拟阈值</p>
             </div>
             <div class="actions">
               <button class="btn btn-primary" @click="saveAll">保存设置</button>
             </div>
           </div>
 
-          <div class="glass-panel p-6 max-w-2xl flex flex-col gap-6">
-            <!-- Theme Appearance Selection -->
-            <div class="setting-row">
-              <div>
-                <h4 class="setting-title">界面外观主题</h4>
-                <p class="setting-desc">告别沉闷死黑，选择最契合您审美的视觉主题，随时自由切换</p>
-              </div>
-              <div class="theme-options">
-                <button 
-                  type="button" 
-                  class="theme-card-option" 
-                  :class="{ active: (config.app?.theme || 'light') === 'light' }"
-                  @click="setTheme('light')"
-                >
-                  <div class="theme-preview light-preview">
-                    <Sun class="w-4 h-4 text-amber-500" />
-                  </div>
-                  <div class="theme-meta">
-                    <span class="name">现代清爽浅色 (默认)</span>
-                    <span class="desc">明快舒适 · 纯净白底微阴影</span>
-                  </div>
-                </button>
-
-                <button 
-                  type="button" 
-                  class="theme-card-option" 
-                  :class="{ active: config.app?.theme === 'slate' }"
-                  @click="setTheme('slate')"
-                >
-                  <div class="theme-preview slate-preview">
-                    <Moon class="w-4 h-4 text-indigo-400" />
-                  </div>
-                  <div class="theme-meta">
-                    <span class="name">柔和灰蓝质感</span>
-                    <span class="desc">低饱和磨砂 · 护眼现代深色</span>
-                  </div>
-                </button>
+          <!-- Section 1: Appearance Themes -->
+          <div class="glass-panel settings-section-card">
+            <div class="section-card-header">
+              <div class="card-icon-title">
+                <div class="section-icon-wrap theme-wrap">
+                  <Palette class="w-5 h-5 text-indigo-500" />
+                </div>
+                <div>
+                  <h3 class="section-title">界面外观主题</h3>
+                  <p class="section-desc">告别沉闷死黑，选择最契合您审美的视觉主题，随时自由切换</p>
+                </div>
               </div>
             </div>
 
-            <!-- Autostart -->
-            <div class="flex items-center justify-between pb-4 border-b border-slate-700/60">
-              <div>
-                <h4 class="text-sm font-medium text-slate-100">Windows 开机自动启动</h4>
-                <p class="text-xs text-slate-400">在系统启动登录后，自动以静默方式在后台托盘运行</p>
+            <div class="theme-options-grid">
+              <div 
+                class="theme-card-option" 
+                :class="{ active: (config.app?.theme || 'light') === 'light' }"
+                @click="setTheme('light')"
+              >
+                <div class="theme-preview light-preview">
+                  <Sun class="w-5 h-5 text-amber-500" />
+                </div>
+                <div class="theme-meta">
+                  <span class="name">现代清爽浅色 (默认)</span>
+                  <span class="desc">明快舒适 · 纯净白底磨砂微阴影</span>
+                </div>
+                <div class="theme-check" v-if="(config.app?.theme || 'light') === 'light'">
+                  <CheckCircle2 class="w-4 h-4 text-indigo-600" />
+                </div>
               </div>
-              <label class="toggle-switch">
-                <input type="checkbox" v-model="config.app.autostart_enabled" @change="saveAll" />
-                <span class="slider"></span>
-              </label>
+
+              <div 
+                class="theme-card-option" 
+                :class="{ active: config.app?.theme === 'slate' }"
+                @click="setTheme('slate')"
+              >
+                <div class="theme-preview slate-preview">
+                  <Moon class="w-5 h-5 text-indigo-400" />
+                </div>
+                <div class="theme-meta">
+                  <span class="name">柔和灰蓝质感</span>
+                  <span class="desc">低饱和磨砂 · 护眼现代深色</span>
+                </div>
+                <div class="theme-check" v-if="config.app?.theme === 'slate'">
+                  <CheckCircle2 class="w-4 h-4 text-cyan-400" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 2: Windows System Integrations Tiles -->
+          <div class="glass-panel settings-section-card mt-6">
+            <div class="section-card-header">
+              <div class="card-icon-title">
+                <div class="section-icon-wrap system-wrap">
+                  <Monitor class="w-5 h-5 text-cyan-500" />
+                </div>
+                <div>
+                  <h3 class="section-title">Windows 系统集成与行为控制</h3>
+                  <p class="section-desc">深度集成 Windows 11 / 10 核心消息泵与持久化配置</p>
+                </div>
+              </div>
             </div>
 
-            <!-- Restore modifiers -->
-            <div class="flex items-center justify-between pb-4 border-b border-slate-700/60">
-              <div>
-                <h4 class="text-sm font-medium text-slate-100">自动恢复修饰键状态</h4>
-                <p class="text-xs text-slate-400">模拟按键输出后，自动补发松开事件，防止 Ctrl / Alt 粘滞</p>
+            <div class="settings-tiles-list">
+              <!-- Tile 1: Autostart -->
+              <div class="setting-tile">
+                <div class="tile-icon-box autostart-box">
+                  <Monitor class="w-5 h-5 text-indigo-500" />
+                </div>
+                <div class="tile-content">
+                  <span class="tile-title">Windows 开机自动启动</span>
+                  <span class="tile-desc">在系统登录完成后，自动以静默方式在任务栏托盘驻留，确保快捷键实时响应</span>
+                </div>
+                <div class="tile-action">
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="config.app.autostart_enabled" @change="saveAll" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
               </div>
-              <label class="toggle-switch">
-                <input type="checkbox" v-model="config.app.restore_held_modifiers" @change="saveAll" />
-                <span class="slider"></span>
-              </label>
-            </div>
 
-            <!-- Output Delay Slider -->
-            <div class="pb-4 border-b border-slate-700/60">
-              <div class="flex items-center justify-between mb-2">
-                <h4 class="text-sm font-medium text-slate-100">按键模拟延迟 (Delay ms)</h4>
-                <span class="font-mono text-cyan-400 text-xs">{{ config.app.output_delay_ms }} ms</span>
+              <!-- Tile 2: Restore Modifiers -->
+              <div class="setting-tile">
+                <div class="tile-icon-box keyboard-box">
+                  <Keyboard class="w-5 h-5 text-cyan-500" />
+                </div>
+                <div class="tile-content">
+                  <span class="tile-title">自动恢复修饰键状态 (Restore Held Modifiers)</span>
+                  <span class="tile-desc">模拟按键输出后，自动补发松开事件，防止 Ctrl / Alt / Shift 产生系统粘滞</span>
+                </div>
+                <div class="tile-action">
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="config.app.restore_held_modifiers" @change="saveAll" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
               </div>
-              <input 
-                type="range" 
-                min="5" 
-                max="100" 
-                step="5" 
-                v-model.number="config.app.output_delay_ms"
-                class="w-full accent-indigo-500 cursor-pointer"
-                @change="saveAll"
-              />
-              <p class="text-xs text-slate-400 mt-1">微小延迟可确保第三方受控软件可靠接收按键序列（推荐 20ms）</p>
-            </div>
 
-            <!-- Direct Config File Path -->
-            <div>
-              <h4 class="text-sm font-medium text-slate-100 mb-1">配置文件物理位置</h4>
-              <p class="text-xs font-mono text-slate-400 bg-slate-900/80 p-2.5 rounded-lg border border-slate-700/50">
-                data/bindx_config.json
-              </p>
+              <!-- Tile 3: Dispatch Delay -->
+              <div class="setting-tile">
+                <div class="tile-icon-box slider-box">
+                  <Sliders class="w-5 h-5 text-purple-500" />
+                </div>
+                <div class="tile-content">
+                  <span class="tile-title">按键模拟延迟 (Dispatch Delay)</span>
+                  <span class="tile-desc">微小延迟确保第三方受控软件（如终端、浏览器、音乐播放器）可靠捕获按键序列</span>
+                </div>
+                <div class="tile-action-slider">
+                  <span class="slider-badge">{{ config.app.output_delay_ms }} ms</span>
+                  <input 
+                    type="range" 
+                    min="5" 
+                    max="100" 
+                    step="5" 
+                    v-model.number="config.app.output_delay_ms"
+                    class="range-slider"
+                    @change="saveAll"
+                  />
+                </div>
+              </div>
+
+              <!-- Tile 4: Config File Path -->
+              <div class="setting-tile">
+                <div class="tile-icon-box folder-box">
+                  <Folder class="w-5 h-5 text-emerald-500" />
+                </div>
+                <div class="tile-content">
+                  <span class="tile-title">配置文件物理存储路径</span>
+                  <span class="tile-desc">快捷键规则、侧键绑定与 WebDAV 配置均持久化保存在当前程序根目录的 JSON 文件中</span>
+                </div>
+                <div class="tile-action-path">
+                  <span class="path-badge">data/bindx_config.json</span>
+                  <button class="btn btn-secondary text-xs" title="在资源管理器中打开" @click="openDataFolder">
+                    <FolderOpen class="w-3.5 h-3.5" />
+                    <span>打开所在目录</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -809,7 +1145,19 @@ import {
   X,
   Sun,
   Moon,
-  Palette
+  Palette,
+  Monitor,
+  Sliders,
+  Folder,
+  Activity,
+  ShieldCheck,
+  CheckCircle2,
+  ArrowRight,
+  ExternalLink,
+  Server,
+  RefreshCw,
+  Upload,
+  FolderOpen
 } from '@lucide/vue'
 
 const appWindow = getCurrentWindow()
@@ -1065,6 +1413,12 @@ const deleteKeyMapping = (index) => {
   saveAll()
 }
 
+const setMousePreset = (mapping, keys) => {
+  mapping.output = [...keys]
+  saveAll()
+  showToast(`已应用快捷键预设: ${keys.join(' + ').toUpperCase()}`, 'info')
+}
+
 // WebDAV Operations
 const testingWebDav = ref(false)
 const uploadingWebDav = ref(false)
@@ -1157,6 +1511,23 @@ const openUrl = async (url) => {
     showToast('打开链接失败: ' + e, 'danger')
   }
 }
+
+const openDataFolder = async () => {
+  try {
+    await invoke('open_external_url', { url: 'data' })
+  } catch (e) {
+    showToast('打开数据目录失败: ' + e, 'danger')
+  }
+}
+
+const resolvedWebDavUrl = computed(() => {
+  if (!config.value.webdav.server_url) return ''
+  let base = config.value.webdav.server_url.trim()
+  if (!base.endsWith('/')) base += '/'
+  let path = (config.value.webdav.remote_filename || 'bindx/bindx_config.json').trim()
+  while (path.startsWith('/')) path = path.slice(1)
+  return base + path
+})
 
 // Global hook for tray
 window.navigateToTab = (tab) => {
@@ -1551,11 +1922,160 @@ onMounted(() => {
   gap: 10px;
 }
 
+/* KPI Row & Cards */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.kpi-card {
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-radius: 14px;
+}
+.kpi-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.hotkey-accent {
+  background: rgba(99, 102, 241, 0.12);
+}
+.remap-accent {
+  background: rgba(236, 72, 153, 0.12);
+}
+.cloud-accent {
+  background: rgba(6, 182, 212, 0.12);
+}
+.kpi-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+.kpi-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.kpi-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kpi-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: -0.02em;
+}
+.kpi-unit {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.kpi-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.kpi-status-dot.online {
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+.kpi-status-dot.offline {
+  background: #94a3b8;
+}
+.kpi-text-val {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
 /* Grid & Cards */
 .grid-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 20px;
+}
+
+/* Integration Cards (Bottom Overview) */
+.integration-card {
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-radius: 14px;
+}
+.integration-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.integration-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.cloud-wrap {
+  background: rgba(6, 182, 212, 0.12);
+}
+.update-wrap {
+  background: rgba(99, 102, 241, 0.12);
+}
+.integration-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.integration-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.integration-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-card-subtle);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+.meta-label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.meta-val {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-main);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.integration-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: auto;
 }
 
 .engine-card {
@@ -1748,26 +2268,453 @@ onMounted(() => {
   border: 1px solid var(--border-color);
 }
 
-/* Settings Theme Section */
-.setting-row {
+/* Remap Section & Mouse Cards */
+.remap-section-card {
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-bottom: 22px;
-  border-bottom: 1px solid var(--border-color);
+  gap: 20px;
+  border-radius: 14px;
 }
-.setting-title {
-  font-size: 14.5px;
+.section-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.section-icon-wrap {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.mouse-wrap {
+  background: rgba(236, 72, 153, 0.12);
+}
+.key-wrap {
+  background: rgba(99, 102, 241, 0.12);
+}
+.webdav-blue {
+  background: rgba(99, 102, 241, 0.12);
+}
+.cloud-blue {
+  background: rgba(6, 182, 212, 0.12);
+}
+.theme-wrap {
+  background: rgba(99, 102, 241, 0.12);
+}
+.system-wrap {
+  background: rgba(6, 182, 212, 0.12);
+}
+.section-title {
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-main);
 }
-.setting-desc {
-  font-size: 13px;
+.section-desc {
+  font-size: 12.5px;
   color: var(--text-muted);
   margin-top: 3px;
+}
+.engine-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--pill-bg);
+  border: 1px solid var(--pill-border);
+  color: var(--pill-text);
+}
+.engine-badge-pill.active {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #059669;
+}
+[data-theme="slate"] .engine-badge-pill.active {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+.engine-badge-pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+.engine-badge-pill.active .dot {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.mouse-cards-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.mouse-tile-card {
+  padding: 20px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: all 0.2s ease;
+}
+.mouse-tile-card:hover {
+  background: var(--bg-card);
+  border-color: var(--border-hover);
+  box-shadow: var(--card-shadow);
+  transform: translateY(-1px);
+}
+.mouse-tile-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mouse-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.mouse-keycap {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 5px 12px;
+  background: rgba(236, 72, 153, 0.12);
+  color: #db2777;
+  border-color: rgba(236, 72, 153, 0.3);
+}
+[data-theme="slate"] .mouse-keycap {
+  background: rgba(236, 72, 153, 0.22);
+  color: #f472b6;
+  border-color: rgba(236, 72, 153, 0.45);
+}
+.mouse-btn-name {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.mouse-btn-desc {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+.mouse-mapping-flow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+.flow-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.flow-label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.keycap.accent {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+[data-theme="slate"] .keycap.accent {
+  background: rgba(99, 102, 241, 0.22);
+  color: #818cf8;
+  border-color: rgba(99, 102, 241, 0.4);
+}
+.mouse-input-row {
+  width: 100%;
+}
+.quick-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.preset-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.preset-tag {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.preset-tag:hover {
+  background: var(--btn-sec-hover);
+  color: var(--text-main);
+  border-color: var(--border-hover);
+}
+
+/* WebDAV Dashboard Layout */
+.webdav-dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.webdav-card {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  border-radius: 14px;
+}
+.preset-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+.preset-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.preset-chip {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 8px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.preset-chip:hover {
+  background: var(--btn-sec-hover);
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+.preset-chip.active {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: #6366f1;
+  color: #4f46e5;
+  font-weight: 600;
+}
+[data-theme="slate"] .preset-chip.active {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: #818cf8;
+  color: #38bdf8;
+}
+.preset-star {
+  color: #eab308;
+}
+.card-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+.sync-status-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--bg-card-subtle);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+.sync-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  gap: 10px;
+}
+.sync-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.sync-actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sync-action-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: var(--bg-card-subtle);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  transition: all 0.15s ease;
+  gap: 14px;
+}
+.sync-action-item:hover {
+  background: var(--bg-card);
+  border-color: var(--border-hover);
+}
+.sync-action-item.highlight {
+  background: rgba(99, 102, 241, 0.06);
+  border-color: rgba(99, 102, 241, 0.25);
+}
+.sync-action-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sync-action-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.sync-action-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* Update Dashboard Layout */
+.update-dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.version-hero-card {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  border-radius: 14px;
+}
+.hero-header-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+.hero-icon-box {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #06b6d4 0%, #4f46e5 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+  flex-shrink: 0;
+}
+.hero-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+.hero-ver {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.hero-specs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 16px;
+  background: var(--bg-card-subtle);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+.spec-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+}
+.spec-name {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.spec-val {
+  color: var(--text-main);
+  font-weight: 600;
+}
+.arch-cards-panel {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-radius: 14px;
+}
+.arch-tiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.arch-tile {
+  display: flex;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg-card-subtle);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  transition: all 0.15s ease;
+}
+.arch-tile:hover {
+  background: var(--bg-card);
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+.arch-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.arch-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.arch-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
   line-height: 1.5;
 }
-.theme-options {
+
+/* Settings Section & Fluent Tiles */
+.settings-section-card {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  border-radius: 14px;
+}
+.theme-options-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
@@ -1827,6 +2774,111 @@ onMounted(() => {
   font-size: 12px;
   color: var(--text-muted);
   margin-top: 2px;
+}
+.theme-check {
+  margin-left: auto;
+}
+.settings-tiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.setting-tile {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  transition: all 0.18s ease;
+}
+.setting-tile:hover {
+  background: var(--bg-card);
+  border-color: var(--border-hover);
+  box-shadow: var(--card-shadow);
+}
+.tile-icon-box {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.autostart-box {
+  background: rgba(99, 102, 241, 0.12);
+}
+.keyboard-box {
+  background: rgba(6, 182, 212, 0.12);
+}
+.slider-box {
+  background: rgba(168, 85, 247, 0.12);
+}
+.folder-box {
+  background: rgba(16, 185, 129, 0.12);
+}
+.tile-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+.tile-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.tile-desc {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.tile-action {
+  flex-shrink: 0;
+}
+.tile-action-slider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+  min-width: 200px;
+}
+.slider-badge {
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: #4f46e5;
+  min-width: 56px;
+  text-align: center;
+}
+[data-theme="slate"] .slider-badge {
+  color: #38bdf8;
+}
+.range-slider {
+  flex: 1;
+  accent-color: #4f46e5;
+  cursor: pointer;
+}
+.tile-action-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.path-badge {
+  font-family: monospace;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
 }
 
 /* Toast */
