@@ -114,6 +114,8 @@ class AutoHideScrollableFrame(ctk.CTkScrollableFrame):
             return
         if measured != self._sync_state:
             self._apply_sync(measured)
+        else:
+            self._kick_recheck()
 
     # 复检：内容自然高度总是慢一拍，量一次不够，要连着量到稳定为止。
     # 但必须收敛后立刻停手 —— 之前写成「每轮都强制重算并再排一轮」，
