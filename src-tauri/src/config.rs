@@ -21,6 +21,8 @@ pub struct AppConfig {
     pub output_delay_ms: u64,
     #[serde(default = "default_true")]
     pub restore_held_modifiers: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 impl Default for AppConfig {
@@ -34,8 +36,13 @@ impl Default for AppConfig {
             autostart_enabled: true,
             output_delay_ms: 20,
             restore_held_modifiers: true,
+            theme: default_theme(),
         }
     }
+}
+
+fn default_theme() -> String {
+    "light".to_string()
 }
 
 fn default_true() -> bool {
