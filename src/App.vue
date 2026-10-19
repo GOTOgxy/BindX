@@ -611,14 +611,12 @@
 
               <!-- Fast presets chips -->
               <div class="preset-section">
-                <span class="preset-label">快速选择：</span>
+                <span class="preset-label">常见服务预设：</span>
                 <div class="preset-chips">
-                  <button type="button" class="preset-chip active" @click="applyWebDavPreset('custom_server')">
-                    <span class="preset-star">★</span> 自建服务 (175.178.147.236)
-                  </button>
                   <button type="button" class="preset-chip" @click="applyWebDavPreset('jianguoyun')">坚果云</button>
-                  <button type="button" class="preset-chip" @click="applyWebDavPreset('alist')">Alist</button>
+                  <button type="button" class="preset-chip" @click="applyWebDavPreset('alist')">Alist 本地/局域网</button>
                   <button type="button" class="preset-chip" @click="applyWebDavPreset('nextcloud')">Nextcloud</button>
+                  <button type="button" class="preset-chip" @click="applyWebDavPreset('custom')">自定义服务</button>
                 </div>
               </div>
 
@@ -628,7 +626,7 @@
                   <input 
                     type="text" 
                     class="input-field" 
-                    placeholder="http://175.178.147.236:7779/"
+                    placeholder="例如: https://dav.example.com/"
                     v-model="config.webdav.server_url" 
                   />
                   <span class="field-hint">支持 http / https 协议</span>
@@ -639,7 +637,7 @@
                   <input 
                     type="text" 
                     class="input-field" 
-                    placeholder="gxy"
+                    placeholder="例如: username"
                     v-model="config.webdav.username" 
                   />
                 </div>
@@ -2594,24 +2592,24 @@ const onDownloadWebDav = async () => {
 }
 
 const applyWebDavPreset = (preset) => {
-  if (preset === 'custom_server') {
-    config.value.webdav.server_url = 'http://175.178.147.236:7779/'
-    config.value.webdav.username = 'gxy'
-    config.value.webdav.password = '***REMOVED***'
-    config.value.webdav.remote_filename = 'bindx'
-    showToast('已载入自建服务配置', 'info')
-  } else if (preset === 'jianguoyun') {
+  if (preset === 'jianguoyun') {
     config.value.webdav.server_url = 'https://dav.jianguoyun.com/dav/'
     config.value.webdav.remote_filename = 'bindx'
-    showToast('已载入坚果云地址', 'info')
+    showToast('已载入坚果云地址模板', 'info')
   } else if (preset === 'alist') {
     config.value.webdav.server_url = 'http://127.0.0.1:5244/dav/'
     config.value.webdav.remote_filename = 'bindx'
-    showToast('已载入 Alist 地址', 'info')
+    showToast('已载入 Alist 本地地址模板', 'info')
   } else if (preset === 'nextcloud') {
-    config.value.webdav.server_url = 'https://your-nextcloud.com/remote.php/dav/files/USERNAME/'
+    config.value.webdav.server_url = 'https://your-cloud.com/remote.php/dav/files/USERNAME/'
     config.value.webdav.remote_filename = 'bindx'
     showToast('已载入 Nextcloud 模板', 'info')
+  } else if (preset === 'custom') {
+    config.value.webdav.server_url = ''
+    config.value.webdav.username = ''
+    config.value.webdav.password = ''
+    config.value.webdav.remote_filename = 'bindx'
+    showToast('已清空并重置为自定义 WebDAV 模板', 'info')
   }
 }
 
