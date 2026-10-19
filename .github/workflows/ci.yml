@@ -2,32 +2,32 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
-  test:
+  build:
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
+          node-version: 22
+          cache: 'npm'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: npm ci
 
-      - name: Unit + contract tests
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Build frontend
+        run: npm run build
 
-      - name: E2E smoke (real hooks + hookd subprocess)
-        run: python tests\e2e_smoke.py
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: E2E crash cycles (hookd respawn)
-        env:
-          BINDX_E2E_CYCLES: "8"
-        run: python tests\e2e_crash_cycles.py
+      - name: Cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+

@@ -144,3 +144,87 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("打开链接失败: {}", e))?;
     Ok(())
 }
+
+#[tauri::command]
+pub fn select_executable_file() -> Result<Option<String>, String> {
+    #[repr(C)]
+    struct OPENFILENAMEW {
+        l_struct_size: u32,
+        hwnd_owner: isize,
+        h_instance: isize,
+        lpstr_filter: *const u16,
+        lpstr_custom_filter: *mut u16,
+        n_max_cust_filter: u32,
+        n_filter_index: u32,
+        lpstr_file: *mut u16,
+        n_max_file: u32,
+        lpstr_file_title: *mut u16,
+        n_max_file_title: u32,
+        lpstr_initial_dir: *const u16,
+        lpstr_title: *const u16,
+        flags: u32,
+        n_file_offset: u16,
+        n_file_extension: u16,
+        lpstr_def_ext: *const u16,
+        l_cust_data: isize,
+        lpfn_hook: usize,
+        lp_template_name: *const u16,
+        pv_reserved: usize,
+        dw_reserved: u32,
+        flags_ex: u32,
+    }
+
+    #[link(name = "comdlg32")]
+    extern "system" {
+        fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+    }
+
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    let mut file_buf = vec![0u16; 1024];
+    let filter: Vec<u16> = "应用程序 (*.exe)\0*.exe\0所有文件 (*.*)\0*.*\0\0"
+        .encode_utf16()
+        .collect();
+    let title: Vec<u16> = "选择应用程序可执行文件\0".encode_utf16().collect();
+    let def_ext: Vec<u16> = "exe\0".encode_utf16().collect();
+
+    let mut ofn = OPENFILENAMEW {
+        l_struct_size: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwnd_owner: 0,
+        h_instance: 0,
+        lpstr_filter: filter.as_ptr(),
+        lpstr_custom_filter: std::ptr::null_mut(),
+        n_max_cust_filter: 0,
+        n_filter_index: 1,
+        lpstr_file: file_buf.as_mut_ptr(),
+        n_max_file: file_buf.len() as u32,
+        lpstr_file_title: std::ptr::null_mut(),
+        n_max_file_title: 0,
+        lpstr_initial_dir: std::ptr::null(),
+        lpstr_title: title.as_ptr(),
+        flags: 0x00081800, // OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST
+        n_file_offset: 0,
+        n_file_extension: 0,
+        lpstr_def_ext: def_ext.as_ptr(),
+        l_cust_data: 0,
+        lpfn_hook: 0,
+        lp_template_name: std::ptr::null(),
+        pv_reserved: 0,
+        dw_reserved: 0,
+        flags_ex: 0,
+    };
+
+    let ret = unsafe { GetOpenFileNameW(&mut ofn) };
+    if ret != 0 {
+        let len = file_buf.iter().position(|&c| c == 0).unwrap_or(file_buf.len());
+        Ok(Some(
+            OsString::from_wide(&file_buf[..len])
+                .to_string_lossy()
+                .to_string(),
+        ))
+    } else {
+        Ok(None)
+    }
+}
+

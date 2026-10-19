@@ -1076,32 +1076,97 @@
         </div>
 
         <div class="modal-body form-grid">
+          <!-- Quick Presets -->
           <div class="form-item col-span-2">
-            <label class="form-label">快捷键</label>
+            <label class="form-label">快速应用预设（点击自动填充）</label>
+            <div class="preset-chips">
+              <button 
+                type="button" 
+                class="preset-chip" 
+                @click="applyHotkeyPreset('cloudmusic')"
+              >
+                网易云音乐
+              </button>
+              <button 
+                type="button" 
+                class="preset-chip" 
+                @click="applyHotkeyPreset('wechat')"
+              >
+                微信
+              </button>
+              <button 
+                type="button" 
+                class="preset-chip" 
+                @click="applyHotkeyPreset('termius')"
+              >
+                Termius
+              </button>
+              <button 
+                type="button" 
+                class="preset-chip" 
+                @click="applyHotkeyPreset('zotero')"
+              >
+                Zotero
+              </button>
+              <button 
+                type="button" 
+                class="preset-chip" 
+                @click="applyHotkeyPreset('vscode')"
+              >
+                VS Code
+              </button>
+              <button 
+                type="button" 
+                class="preset-chip" 
+                @click="applyHotkeyPreset('terminal')"
+              >
+                Windows Terminal
+              </button>
+              <button 
+                type="button" 
+                class="preset-chip" 
+                @click="applyHotkeyPreset('browser_tab')"
+              >
+                网页标签页
+              </button>
+            </div>
+          </div>
+
+          <div class="form-item">
+            <label class="form-label">快捷键组合</label>
             <input 
               type="text" 
               class="input-field" 
-              placeholder="例如: Ctrl+Alt+Q"
+              placeholder="例如: Ctrl+Alt+W"
               v-model="hotkeyModal.data.hotkey"
             />
           </div>
 
           <div class="form-item">
-            <label class="form-label">应用标识</label>
+            <label class="form-label">显示名称</label>
             <input 
               type="text" 
               class="input-field" 
-              placeholder="例如: cloudmusic"
-              v-model="hotkeyModal.data.app"
+              placeholder="例如: 网易云音乐"
+              v-model="hotkeyModal.data.name"
             />
           </div>
 
           <div class="form-item">
             <label class="form-label">目标类型</label>
             <select class="input-field" v-model="hotkeyModal.data.target_type">
-              <option value="win32">桌面客户端</option>
-              <option value="browser_tab">网页标签页</option>
-              <option value="builtin">内置应用</option>
+              <option value="win32">桌面客户端 (普通可执行程序)</option>
+              <option value="builtin">内置预设 (主流预置应用)</option>
+              <option value="browser_tab">网页标签页 (按标题匹配)</option>
+            </select>
+          </div>
+
+          <div class="form-item">
+            <label class="form-label">切换行为</label>
+            <select class="input-field" v-model="hotkeyModal.data._runtime_profile.hide_behavior">
+              <option value="minimize">最小化切换 (默认，前台再次按下最小化)</option>
+              <option value="tray">托盘切换 (适用于网易云音乐、微信等后台软件)</option>
+              <option value="hide">窗口隐藏 (SW_HIDE 直接隐藏)</option>
             </select>
           </div>
 
@@ -1116,23 +1181,41 @@
           </div>
 
           <div class="form-item col-span-2">
-            <label class="form-label">程序文件名</label>
+            <label class="form-label">程序进程文件名</label>
             <input 
               type="text" 
               class="input-field" 
-              placeholder="例如: cloudmusic.exe，留空自动推断"
+              placeholder="例如: cloudmusic.exe，留空可从路径自动推断"
               v-model="hotkeyModal.data.exe_name"
             />
           </div>
 
           <div class="form-item col-span-2">
-            <label class="form-label">程序路径</label>
-            <input 
-              type="text" 
-              class="input-field" 
-              placeholder="例如: C:\Program Files\App\app.exe"
-              v-model="hotkeyModal.data.install_path"
-            />
+            <label class="form-label">程序路径 (可选)</label>
+            <div class="flex gap-2">
+              <input 
+                type="text" 
+                class="input-field flex-1" 
+                placeholder="例如: D:\Program Files\App\app.exe (可留空自动识别)"
+                v-model="hotkeyModal.data.install_path"
+              />
+              <button type="button" class="btn btn-secondary whitespace-nowrap" @click="pickExecutableFile">
+                <FolderOpen class="w-4 h-4 mr-1" />
+                <span>浏览...</span>
+              </button>
+            </div>
+            <span class="field-hint">点击“浏览”可通过 Windows 原生文件窗口选择本地 .exe 文件</span>
+          </div>
+
+          <div class="form-item col-span-2 flex items-center justify-between pt-1">
+            <div>
+              <span class="font-medium text-sm text-main">程序未运行时自动启动</span>
+              <p class="text-xs text-muted">按下快捷键时若应用未运行，自动启动程序</p>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" v-model="hotkeyModal.data.launch_if_not_running" />
+              <span class="slider"></span>
+            </label>
           </div>
         </div>
 
@@ -1447,9 +1530,10 @@ const openAddHotkeyModal = () => {
     index: -1,
     data: {
       app: '',
+      name: '',
       hotkey: 'CTRL+ALT+W',
       enabled: true,
-      launch_if_not_running: false,
+      launch_if_not_running: true,
       install_path: '',
       target_type: 'win32',
       exe_name: '',
@@ -1463,11 +1547,107 @@ const openAddHotkeyModal = () => {
 }
 
 const editHotkey = (entry, index) => {
+  const data = JSON.parse(JSON.stringify(entry))
+  if (!data._runtime_profile) {
+    data._runtime_profile = { hide_behavior: 'minimize' }
+  } else if (!data._runtime_profile.hide_behavior) {
+    data._runtime_profile.hide_behavior = 'minimize'
+  }
   hotkeyModal.value = {
     show: true,
     isEdit: true,
     index,
-    data: JSON.parse(JSON.stringify(entry))
+    data
+  }
+}
+
+const applyHotkeyPreset = (preset) => {
+  if (!hotkeyModal.value.data._runtime_profile) {
+    hotkeyModal.value.data._runtime_profile = {}
+  }
+  switch (preset) {
+    case 'cloudmusic':
+      hotkeyModal.value.data.app = 'cloudmusic'
+      hotkeyModal.value.data.name = '网易云音乐'
+      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.exe_name = 'cloudmusic.exe'
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'tray'
+      hotkeyModal.value.data.launch_if_not_running = true
+      break
+    case 'wechat':
+      hotkeyModal.value.data.app = 'wechat'
+      hotkeyModal.value.data.name = '微信'
+      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.exe_name = 'WeChat.exe'
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'tray'
+      hotkeyModal.value.data.launch_if_not_running = true
+      break
+    case 'termius':
+      hotkeyModal.value.data.app = 'termius'
+      hotkeyModal.value.data.name = 'Termius'
+      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.exe_name = 'Termius.exe'
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      hotkeyModal.value.data.launch_if_not_running = true
+      break
+    case 'zotero':
+      hotkeyModal.value.data.app = 'zotero'
+      hotkeyModal.value.data.name = 'Zotero'
+      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.exe_name = 'zotero.exe'
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      hotkeyModal.value.data.launch_if_not_running = true
+      break
+    case 'vscode':
+      hotkeyModal.value.data.app = 'vscode'
+      hotkeyModal.value.data.name = 'Visual Studio Code'
+      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.exe_name = 'Code.exe'
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      hotkeyModal.value.data.launch_if_not_running = true
+      break
+    case 'terminal':
+      hotkeyModal.value.data.app = 'terminal'
+      hotkeyModal.value.data.name = 'Windows Terminal'
+      hotkeyModal.value.data.target_type = 'builtin'
+      hotkeyModal.value.data.exe_name = 'wt.exe'
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      hotkeyModal.value.data.launch_if_not_running = true
+      break
+    case 'browser_tab':
+      hotkeyModal.value.data.target_type = 'browser_tab'
+      hotkeyModal.value.data.name = hotkeyModal.value.data.name || '网页标签页'
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      break
+    default:
+      hotkeyModal.value.data.target_type = 'win32'
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      break
+  }
+}
+
+const pickExecutableFile = async () => {
+  try {
+    const selected = await invoke('select_executable_file')
+    if (selected) {
+      hotkeyModal.value.data.install_path = selected
+      const parts = selected.split(/\\|\//)
+      const filename = parts.pop()
+      if (filename) {
+        if (!hotkeyModal.value.data.exe_name) {
+          hotkeyModal.value.data.exe_name = filename
+        }
+        if (!hotkeyModal.value.data.name) {
+          hotkeyModal.value.data.name = filename.replace(/\.exe$/i, '')
+        }
+        if (!hotkeyModal.value.data.app) {
+          hotkeyModal.value.data.app = filename.replace(/\.exe$/i, '').toLowerCase()
+        }
+      }
+      showToast('已选取程序文件', 'success')
+    }
+  } catch (err) {
+    showToast('选择文件失败: ' + err, 'danger')
   }
 }
 
@@ -1475,6 +1655,9 @@ const saveHotkeyModal = () => {
   if (!hotkeyModal.value.data.hotkey.trim()) {
     showToast('快捷键组合不能为空', 'danger')
     return
+  }
+  if (!hotkeyModal.value.data.app) {
+    hotkeyModal.value.data.app = hotkeyModal.value.data.name || 'app'
   }
   if (hotkeyModal.value.isEdit) {
     config.value.hotkeys.entries[hotkeyModal.value.index] = hotkeyModal.value.data

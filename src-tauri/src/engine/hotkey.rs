@@ -1,5 +1,7 @@
 use crate::config::HotkeyEntry;
-use crate::engine::win32::{find_window, get_vk_code, launch_app, toggle_app_window};
+use crate::engine::win32::{
+    find_window, get_vk_code, launch_app, resolve_app_executable_path, toggle_app_window,
+};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -219,20 +221,33 @@ fn handle_hotkey_trigger(
             (entry.exe_name.as_deref(), entry.title_keyword.as_deref())
         }
         Some("builtin") => {
-            if entry.app == "termius" || entry.name.as_deref() == Some("Termius") {
-                (Some("Termius.exe"), None)
+            let exe = if let Some(ref e) = entry.exe_name {
+                Some(e.as_str())
             } else {
-                (entry.exe_name.as_deref(), entry.title_keyword.as_deref())
-            }
+                match entry.app.to_lowercase().as_str() {
+                    "cloudmusic" => Some("cloudmusic.exe"),
+                    "wechat" => Some("WeChat.exe"),
+                    "termius" => Some("Termius.exe"),
+                    "zotero" => Some("zotero.exe"),
+                    "vscode" | "code" => Some("Code.exe"),
+                    "terminal" => Some("wt.exe"),
+                    _ => None,
+                }
+            };
+            (exe, entry.title_keyword.as_deref())
         }
         _ => {
             // General or app-name based
             let exe = if let Some(ref e) = entry.exe_name {
                 Some(e.as_str())
             } else {
-                match entry.app.as_str() {
+                match entry.app.to_lowercase().as_str() {
                     "cloudmusic" => Some("cloudmusic.exe"),
+                    "wechat" => Some("WeChat.exe"),
+                    "termius" => Some("Termius.exe"),
                     "zotero" => Some("zotero.exe"),
+                    "vscode" | "code" => Some("Code.exe"),
+                    "terminal" => Some("wt.exe"),
                     _ => None,
                 }
             };
@@ -242,7 +257,19 @@ fn handle_hotkey_trigger(
 
     if let Some(hwnd) = find_window(exe_name, title_keyword) {
         toggle_app_window(hwnd, hide_behavior);
-    } else if entry.launch_if_not_running && !entry.install_path.is_empty() {
-        let _ = launch_app(&entry.install_path);
+    } else {
+        // Window was not found!
+        // Either the app is running in tray without an active window (e.g. NetEase Cloud Music),
+        // or the app has not been launched yet.
+        let mut launch_target: Option<String> = None;
+        if !entry.install_path.trim().is_empty() {
+            launch_target = Some(entry.install_path.clone());
+        } else if let Some(target_exe) = exe_name {
+            launch_target = resolve_app_executable_path(target_exe);
+        }
+
+        if let Some(target) = launch_target {
+            let _ = launch_app(&target);
+        }
     }
 }
