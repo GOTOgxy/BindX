@@ -13,3 +13,4 @@ src-tauri/target/
 target/
 *.exe
 .cargo/
+WebView2Loader.dll

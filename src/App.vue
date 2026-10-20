@@ -1442,7 +1442,7 @@
 
             <div class="form-item col-span-2">
               <label class="form-label">程序路径 (可选)</label>
-              <div class="relative flex items-center">
+              <div class="flex items-center" style="position: relative">
                 <input
                   type="text"
                   class="input-field pr-10"
@@ -2214,6 +2214,10 @@ const saveHotkeyModal = async () => {
     hotkeyModal.value.data.app = hotkeyModal.value.data.name || 'app'
   }
   if (hotkeyModal.value.data.target_type === 'browser_tab') {
+    if (!(hotkeyModal.value.data.title_keyword || '').trim()) {
+      showToast('请填写标题关键字，这是匹配网页应用窗口的依据', 'danger', 6000)
+      return
+    }
     if (browserPresetSelection.value === 'auto') {
       hotkeyModal.value.data.exe_name = ''
     }

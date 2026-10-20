@@ -208,4 +208,3 @@ GNU 构建的 exe 需 `WebView2Loader.dll` 傍身；MSVC 构建为真·单文件
 ### 5.5 辅助工具
 
 - `cargo run --release --example scan_apps`：打印本机已安装网页应用检测明细（GNU 构建需把 `WebView2Loader.dll` 放到 example exe 旁）。
-- `bindx-v3-plan.md`：v2.1.0 需求规划与决策记录。
