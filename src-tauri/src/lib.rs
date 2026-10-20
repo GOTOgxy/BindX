@@ -65,6 +65,9 @@ pub fn run() {
                 }
             }
 
+            // Cleanup any legacy Python startup targets if present
+            crate::autostart::cleanup_legacy_startup();
+
             // Start engines if enabled in configuration
             if cfg.app.hotkey_running {
                 hotkey_engine.start(cfg.hotkeys.entries.clone());

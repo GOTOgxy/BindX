@@ -46,7 +46,23 @@ pub fn is_autostart_enabled() -> bool {
     }
 }
 
+pub fn cleanup_legacy_startup() {
+    if let Some(app_data) = dirs::data_dir() {
+        let startup_dir = app_data.join("Microsoft\\Windows\\Start Menu\\Programs\\Startup");
+        let legacy_bat = startup_dir.join("BindX.bat");
+        if legacy_bat.exists() {
+            let _ = std::fs::remove_file(legacy_bat);
+        }
+        let legacy_lnk = startup_dir.join("BindX.lnk");
+        if legacy_lnk.exists() {
+            let _ = std::fs::remove_file(legacy_lnk);
+        }
+    }
+}
+
 pub fn set_autostart(enable: bool) -> Result<(), String> {
+    cleanup_legacy_startup();
+
     let subkey = to_wide_chars(RUN_KEY);
     let app_val = to_wide_chars(APP_NAME);
     let mut hkey = windows::Win32::System::Registry::HKEY::default();
