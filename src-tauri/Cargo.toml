@@ -1,6 +1,6 @@
 [package]
 name = "bindx"
-version = "2.1.2"
+version = "3.0.0"
 description = "BindX - Windows Input Enhancement & Hotkey Manager"
 authors = ["BindX Contributors"]
 edition = "2021"
