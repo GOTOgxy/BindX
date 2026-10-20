@@ -51,6 +51,20 @@ pub fn run() {
             remap_engine: remap_engine_clone,
         })
         .setup(move |app| {
+            // Silently clean up old executable or temp update files from previous update cycles
+            if let Ok(exe_path) = std::env::current_exe() {
+                let old_exe = exe_path.with_extension("old");
+                if old_exe.exists() {
+                    let _ = std::fs::remove_file(old_exe);
+                }
+                if let Some(parent) = exe_path.parent() {
+                    let custom_tmp = parent.join("bindx_update.tmp");
+                    if custom_tmp.exists() {
+                        let _ = std::fs::remove_file(custom_tmp);
+                    }
+                }
+            }
+
             // Start engines if enabled in configuration
             if cfg.app.hotkey_running {
                 hotkey_engine.start(cfg.hotkeys.entries.clone());
@@ -111,7 +125,9 @@ pub fn run() {
             locate_start_menu_shortcut,
             create_desktop_shortcut,
             get_config_path_info,
-            open_config_folder
+            open_config_folder,
+            start_auto_update,
+            restart_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

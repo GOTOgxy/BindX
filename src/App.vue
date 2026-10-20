@@ -13,7 +13,7 @@
         </div>
         <div class="brand-text" data-tauri-drag-region>
           <span class="title" data-tauri-drag-region>BindX</span>
-          <span class="version-tag" data-tauri-drag-region>v2.0.2</span>
+          <span class="version-tag" data-tauri-drag-region>v2.0.3</span>
         </div>
       </div>
 
@@ -313,7 +313,7 @@
               <div class="integration-meta">
                 <div class="meta-item">
                   <span class="meta-label">当前版本</span>
-                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.2</span>
+                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.3</span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">开机自启</span>
@@ -795,7 +795,7 @@
                   </div>
                   <div>
                     <h3 class="hero-title">BindX</h3>
-                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v2.0.2</span></p>
+                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v2.0.3</span></p>
                   </div>
                 </div>
                 <div>
@@ -838,14 +838,84 @@
                   <pre class="changelog-text">{{ updateInfo.release_notes || '无更新说明' }}</pre>
                 </div>
 
-                <div class="flex gap-3 mt-4">
-                  <button class="btn btn-success" @click="openUrl(updateInfo.download_url)">
-                    <DownloadCloud class="w-4 h-4" />
-                    立即下载
-                  </button>
-                  <button class="btn btn-secondary" @click="openUrl(updateInfo.release_page_url)">
-                    发布页面
-                  </button>
+                <!-- Auto Update Status and Actions -->
+                <div class="update-action-container mt-4">
+                  <!-- Progress Bar and Status during Downloading / Applying -->
+                  <div v-if="updateProgress.status === 'downloading' || updateProgress.status === 'applying'" class="update-progress-block">
+                    <div class="flex items-center justify-between text-xs font-medium mb-1.5">
+                      <span class="flex items-center gap-1.5 text-indigo-600 font-semibold">
+                        <RefreshCw class="w-3.5 h-3.5 animate-spin" />
+                        <span>{{ updateProgress.status === 'applying' ? '正在替换程序文件...' : '正在自动下载更新...' }}</span>
+                      </span>
+                      <span class="font-mono text-xs text-indigo-600 font-semibold">{{ updateProgress.percent }}%</span>
+                    </div>
+                    <div class="progress-bar-track">
+                      <div class="progress-bar-fill" :style="{ width: updateProgress.percent + '%' }"></div>
+                    </div>
+                    <div class="text-xs text-muted mt-2 flex items-center justify-between">
+                      <span>{{ updateProgress.message }}</span>
+                      <span class="text-dim">下载完成后自动替换</span>
+                    </div>
+                  </div>
+
+                  <!-- Done State: Prompt to Restart -->
+                  <div v-else-if="updateProgress.status === 'done'" class="update-done-block">
+                    <div class="done-alert-box mb-3">
+                      <CheckCircle2 class="w-5 h-5 text-emerald-500 shrink-0" />
+                      <div>
+                        <div class="font-semibold text-sm text-emerald-700">更新已就绪！</div>
+                        <div class="text-xs text-emerald-600 mt-0.5">程序已成功原地更新，点击立即重启即可切换至新版本（所有配置与数据完整保留）。</div>
+                      </div>
+                    </div>
+                    <div class="flex gap-2.5">
+                      <button class="btn btn-primary flex-1" @click="onRestartApp">
+                        <RefreshCw class="w-4 h-4" />
+                        立即重启生效
+                      </button>
+                      <button class="btn btn-secondary" @click="resetUpdateState">
+                        稍后重启
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Error State: Show message and retry -->
+                  <div v-else-if="updateProgress.status === 'error'" class="update-error-block">
+                    <div class="error-alert-box mb-3">
+                      <div class="text-xs text-rose-600 font-medium">更新失败: {{ updateProgress.message }}</div>
+                    </div>
+                    <div class="flex gap-2.5">
+                      <button class="btn btn-primary" @click="onStartAutoUpdate">
+                        <RefreshCw class="w-4 h-4" />
+                        重试自动更新
+                      </button>
+                      <button class="btn btn-secondary" @click="openUrl(updateInfo.download_url)">
+                        <ExternalLink class="w-4 h-4" />
+                        浏览器手动下载
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Idle State: Initial prompt with Auto Update & Browser link -->
+                  <div v-else class="update-idle-block">
+                    <div class="flex flex-col gap-2.5">
+                      <div class="flex gap-3">
+                        <button class="btn btn-success flex-1" @click="onStartAutoUpdate">
+                          <DownloadCloud class="w-4 h-4" />
+                          一键自动更新
+                        </button>
+                        <button class="btn btn-secondary" @click="openUrl(updateInfo.release_page_url)">
+                          发布页面
+                        </button>
+                      </div>
+                      <div class="flex items-center justify-between text-xs text-dim px-0.5">
+                        <span>自动原地替换当前主程序，保留全部配置</span>
+                        <a href="javascript:void(0)" class="text-indigo-600 hover:underline flex items-center gap-1" @click="openUrl(updateInfo.download_url)">
+                          <span>浏览器下载</span>
+                          <ExternalLink class="w-3 h-3" />
+                        </a>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1623,6 +1693,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import appIcon from './assets/icon.png'
 import { 
@@ -2685,6 +2756,13 @@ const applyWebDavPreset = (preset) => {
 // Updates
 const checkingUpdate = ref(false)
 const updateInfo = ref(null)
+const updateProgress = ref({
+  status: 'idle', // 'idle' | 'downloading' | 'applying' | 'done' | 'error'
+  percent: 0,
+  downloaded_bytes: 0,
+  total_bytes: 0,
+  message: '',
+})
 
 const onCheckUpdate = async () => {
   checkingUpdate.value = true
@@ -2693,6 +2771,7 @@ const onCheckUpdate = async () => {
     updateInfo.value = res
     if (res.has_update) {
       showToast(`发现新版本 ${res.latest_version}`, 'success')
+      currentTab.value = 'update'
     } else {
       showToast('当前已是最新版本', 'info')
     }
@@ -2701,6 +2780,45 @@ const onCheckUpdate = async () => {
   } finally {
     checkingUpdate.value = false
   }
+}
+
+const onStartAutoUpdate = async () => {
+  if (!updateInfo.value || !updateInfo.value.download_url) {
+    showToast('无可用下载链接', 'danger')
+    return
+  }
+  updateProgress.value = {
+    status: 'downloading',
+    percent: 0,
+    downloaded_bytes: 0,
+    total_bytes: 0,
+    message: '正在准备下载...',
+  }
+  try {
+    await invoke('start_auto_update', { downloadUrl: updateInfo.value.download_url })
+  } catch (e) {
+    updateProgress.value = {
+      status: 'error',
+      percent: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+      message: String(e),
+    }
+    showToast('自动更新失败: ' + e, 'danger', 6000)
+  }
+}
+
+const onRestartApp = async () => {
+  try {
+    showToast('正在重启 BindX...', 'info')
+    await invoke('restart_app')
+  } catch (e) {
+    showToast('重启失败: ' + e, 'danger')
+  }
+}
+
+const resetUpdateState = () => {
+  updateProgress.value.status = 'idle'
 }
 
 const openUrl = async (url) => {
@@ -2817,9 +2935,18 @@ const onCreateDesktop = async () => {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   fetchConfig()
   checkStartMenuStatus()
+  try {
+    await listen('update-progress', (event) => {
+      if (event && event.payload) {
+        updateProgress.value = event.payload
+      }
+    })
+  } catch (err) {
+    console.warn('listen update-progress error:', err)
+  }
 })
 </script>
 
@@ -4549,4 +4676,39 @@ onMounted(() => {
 .fade-enter-from, .fade-leave-to {
   opacity: 0;
 }
+
+/* Progress Bar & Alert Styles for Update */
+.update-action-container {
+  width: 100%;
+}
+.progress-bar-track {
+  width: 100%;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 9999px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #4f46e5);
+  border-radius: 9999px;
+  transition: width 0.25s ease-out;
+}
+.done-alert-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 8px;
+}
+.error-alert-box {
+  padding: 10px 14px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 8px;
+}
+
 </style>

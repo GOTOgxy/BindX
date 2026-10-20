@@ -390,3 +390,40 @@ pub fn open_config_folder() -> Result<(), String> {
     open::that(dir).map_err(|e| format!("打开配置文件目录失败: {}", e))?;
     Ok(())
 }
+
+
+#[tauri::command]
+pub async fn start_auto_update(
+    app: tauri::AppHandle,
+    download_url: String,
+) -> Result<(), String> {
+    crate::updater::download_and_install_update(app, download_url).await
+}
+
+#[tauri::command]
+pub fn restart_app() -> Result<(), String> {
+    let current_exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let script = format!(
+            "Start-Sleep -Milliseconds 600; Start-Process -FilePath '{}'",
+            current_exe.to_string_lossy().replace('\'', "''")
+        );
+        let _ = std::process::Command::new("powershell")
+            .creation_flags(CREATE_NO_WINDOW)
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(&script)
+            .spawn();
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new(&current_exe).spawn();
+    }
+
+    std::process::exit(0);
+}

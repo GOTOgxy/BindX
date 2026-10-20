@@ -1,6 +1,7 @@
 use reqwest::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateCheckResult {
@@ -31,6 +32,15 @@ struct GithubRelease {
     assets: Vec<GithubAsset>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateProgress {
+    pub status: String, // "downloading" | "applying" | "done" | "error"
+    pub percent: f64,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub message: String,
+}
+
 pub async fn check_for_updates(update_url: &str) -> Result<UpdateCheckResult, String> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let url = if update_url.trim().is_empty() {
@@ -40,7 +50,7 @@ pub async fn check_for_updates(update_url: &str) -> Result<UpdateCheckResult, St
     };
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(15))
         .build()
         .unwrap_or_default();
 
@@ -77,10 +87,13 @@ pub async fn check_for_updates(update_url: &str) -> Result<UpdateCheckResult, St
     let latest_tag = release.tag_name.trim().trim_start_matches('v');
     let has_update = compare_semver(latest_tag, &current_version);
 
-    // Prefer .exe or .zip from release assets
-    let exe_asset = release.assets.iter().find(|a| {
-        a.name.ends_with(".exe") || a.name.ends_with(".zip")
-    });
+    // Strictly prioritize bindx.exe first, then any .exe, and only fallback to .zip
+    let exe_asset = release
+        .assets
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case("bindx.exe"))
+        .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".exe")))
+        .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".zip")));
 
     let download_url = exe_asset
         .map(|a| a.browser_download_url.clone())
@@ -96,6 +109,196 @@ pub async fn check_for_updates(update_url: &str) -> Result<UpdateCheckResult, St
         download_url,
         release_page_url: release.html_url,
     })
+}
+
+pub async fn download_and_install_update<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    download_url: String,
+) -> Result<(), String> {
+    use std::io::Write;
+
+    let current_exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径: {}", e))?;
+    let exe_dir = current_exe.parent().ok_or_else(|| "无法获取程序所在目录".to_string())?;
+    let temp_file = exe_dir.join("bindx_update.tmp");
+
+    if temp_file.exists() {
+        let _ = std::fs::remove_file(&temp_file);
+    }
+
+    let _ = app.emit("update-progress", UpdateProgress {
+        status: "downloading".to_string(),
+        percent: 0.0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        message: "正在连接更新服务器...".to_string(),
+    });
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("创建网络客户端失败: {}", e))?;
+
+    let mut res = client
+        .get(&download_url)
+        .header(USER_AGENT, "BindX-App")
+        .send()
+        .await
+        .map_err(|e| {
+            let err = format!("请求下载失败: {}", e);
+            let _ = app.emit("update-progress", UpdateProgress {
+                status: "error".to_string(),
+                percent: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                message: err.clone(),
+            });
+            err
+        })?;
+
+    if !res.status().is_success() {
+        let err = format!("下载失败，服务器返回 HTTP {}", res.status().as_u16());
+        let _ = app.emit("update-progress", UpdateProgress {
+            status: "error".to_string(),
+            percent: 0.0,
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            message: err.clone(),
+        });
+        return Err(err);
+    }
+
+    let total_bytes = res.content_length().unwrap_or(0);
+    let mut downloaded_bytes: u64 = 0;
+
+    let mut file = std::fs::File::create(&temp_file)
+        .map_err(|e| {
+            let err = format!("无法创建临时文件 ({}): {}", temp_file.display(), e);
+            let _ = app.emit("update-progress", UpdateProgress {
+                status: "error".to_string(),
+                percent: 0.0,
+                downloaded_bytes: 0,
+                total_bytes,
+                message: err.clone(),
+            });
+            err
+        })?;
+
+    let mut last_emit_percent = -1;
+    let mut last_emit_time = std::time::Instant::now();
+
+    while let Some(chunk) = res.chunk().await.map_err(|e| {
+        let err = format!("数据传输中断: {}", e);
+        let _ = app.emit("update-progress", UpdateProgress {
+            status: "error".to_string(),
+            percent: 0.0,
+            downloaded_bytes,
+            total_bytes,
+            message: err.clone(),
+        });
+        err
+    })? {
+        file.write_all(&chunk).map_err(|e| format!("写入文件失败: {}", e))?;
+        downloaded_bytes += chunk.len() as u64;
+
+        let percent = if total_bytes > 0 {
+            (downloaded_bytes as f64 / total_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let current_percent_int = percent as i32;
+        if current_percent_int != last_emit_percent || last_emit_time.elapsed().as_millis() > 150 {
+            last_emit_percent = current_percent_int;
+            last_emit_time = std::time::Instant::now();
+
+            let mb_down = downloaded_bytes as f64 / 1_048_576.0;
+            let mb_total = total_bytes as f64 / 1_048_576.0;
+            let msg = if total_bytes > 0 {
+                format!("已下载 {:.1} MB / {:.1} MB ({:.0}%)", mb_down, mb_total, percent)
+            } else {
+                format!("已下载 {:.1} MB", mb_down)
+            };
+
+            let _ = app.emit("update-progress", UpdateProgress {
+                status: "downloading".to_string(),
+                percent: (percent * 10.0).round() / 10.0,
+                downloaded_bytes,
+                total_bytes,
+                message: msg,
+            });
+        }
+    }
+
+    file.flush().map_err(|e| format!("保存文件失败: {}", e))?;
+    drop(file);
+
+    // Verify downloaded file size
+    let meta = std::fs::metadata(&temp_file)
+        .map_err(|e| format!("读取已下载文件元信息失败: {}", e))?;
+    if meta.len() < 1_000_000 {
+        let _ = std::fs::remove_file(&temp_file);
+        let err = format!("下载文件异常 (大小仅 {} 字节)，可能下载不完整", meta.len());
+        let _ = app.emit("update-progress", UpdateProgress {
+            status: "error".to_string(),
+            percent: 0.0,
+            downloaded_bytes: meta.len(),
+            total_bytes,
+            message: err.clone(),
+        });
+        return Err(err);
+    }
+
+    let _ = app.emit("update-progress", UpdateProgress {
+        status: "applying".to_string(),
+        percent: 100.0,
+        downloaded_bytes: meta.len(),
+        total_bytes: meta.len(),
+        message: "下载完成，正在替换程序文件...".to_string(),
+    });
+
+    let old_exe = current_exe.with_extension("old");
+    if old_exe.exists() {
+        let _ = std::fs::remove_file(&old_exe);
+    }
+
+    // Rename current running executable to .old
+    if let Err(e) = std::fs::rename(&current_exe, &old_exe) {
+        let _ = std::fs::remove_file(&temp_file);
+        let err = format!("备份原程序失败 (可能是权限受限): {}", e);
+        let _ = app.emit("update-progress", UpdateProgress {
+            status: "error".to_string(),
+            percent: 0.0,
+            downloaded_bytes: meta.len(),
+            total_bytes,
+            message: err.clone(),
+        });
+        return Err(err);
+    }
+
+    // Move downloaded temp file to current_exe
+    if let Err(e) = std::fs::rename(&temp_file, &current_exe) {
+        // Rollback
+        let _ = std::fs::rename(&old_exe, &current_exe);
+        let err = format!("替换新版本失败 (已自动回滚为原版本): {}", e);
+        let _ = app.emit("update-progress", UpdateProgress {
+            status: "error".to_string(),
+            percent: 0.0,
+            downloaded_bytes: meta.len(),
+            total_bytes,
+            message: err.clone(),
+        });
+        return Err(err);
+    }
+
+    let _ = app.emit("update-progress", UpdateProgress {
+        status: "done".to_string(),
+        percent: 100.0,
+        downloaded_bytes: meta.len(),
+        total_bytes: meta.len(),
+        message: "更新已成功就绪！点击立即重启生效。".to_string(),
+    });
+
+    Ok(())
 }
 
 fn compare_semver(remote: &str, current: &str) -> bool {
