@@ -1,6 +1,6 @@
 [package]
 name = "bindx"
-version = "2.0.3"
+version = "2.1.0"
 description = "BindX - Windows Input Enhancement & Hotkey Manager"
 authors = ["BindX Contributors"]
 edition = "2021"
@@ -23,7 +23,8 @@ windows = { version = "0.58", features = [
     "Win32_System_ProcessStatus",
     "Win32_Graphics_Dwm",
     "Win32_System_Registry",
-    "Win32_Security"
+    "Win32_Security",
+    "Win32_UI_Shell"
 ] }
 anyhow = "1.0"
 dirs = "5.0"

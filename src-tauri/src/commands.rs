@@ -396,8 +396,27 @@ pub fn open_config_folder() -> Result<(), String> {
 pub async fn start_auto_update(
     app: tauri::AppHandle,
     download_url: String,
+    setup_download_url: Option<String>,
 ) -> Result<(), String> {
-    crate::updater::download_and_install_update(app, download_url).await
+    crate::updater::download_and_install_update(app, download_url, setup_download_url).await
+}
+
+#[tauri::command]
+pub fn get_install_mode() -> crate::updater::InstallMode {
+    crate::updater::detect_install_mode()
+}
+
+#[tauri::command]
+pub fn detect_installed_web_app(
+    url: String,
+    hints: Vec<String>,
+) -> Option<crate::engine::win32::InstalledWebApp> {
+    crate::engine::win32::find_installed_web_app_for_url(&url, &hints)
+}
+
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }
 
 #[tauri::command]

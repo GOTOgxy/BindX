@@ -12,7 +12,93 @@ pub struct UpdateCheckResult {
     pub release_notes: String,
     pub published_at: String,
     pub download_url: String,
+    pub setup_download_url: String,
     pub release_page_url: String,
+}
+
+/// How this copy of BindX was deployed. Updates apply differently per mode:
+/// portable replaces the running exe in place, installed re-runs the silent installer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallMode {
+    Portable,
+    Installed,
+}
+
+const UNINSTALL_REG_KEY: &str =
+    "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\BindX_is1";
+
+fn normalize_path(p: &std::path::Path) -> String {
+    p.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
+/// Read InstallLocation from the Inno Setup uninstall entry (HKCU, user-level install).
+fn read_uninstall_install_location() -> Option<String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_SZ,
+    };
+    let key_wide: Vec<u16> = UNINSTALL_REG_KEY.encode_utf16().chain(std::iter::once(0)).collect();
+    let value_wide: Vec<u16> = "InstallLocation".encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let mut hkey = HKEY::default();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            windows::core::PCWSTR(key_wide.as_ptr()),
+            0,
+            KEY_READ,
+            &mut hkey,
+        )
+        .is_err()
+        {
+            return None;
+        }
+        let mut buf = [0u16; 260];
+        let mut cb_data = (buf.len() * 2) as u32;
+        let mut reg_type = REG_SZ;
+        let status = RegQueryValueExW(
+            hkey,
+            windows::core::PCWSTR(value_wide.as_ptr()),
+            None,
+            Some(&mut reg_type),
+            Some(buf.as_mut_ptr() as *mut u8),
+            Some(&mut cb_data),
+        );
+        let _ = RegCloseKey(hkey);
+        if status.is_ok() && cb_data > 0 {
+            let len = (cb_data as usize / 2).saturating_sub(1);
+            return Some(std::ffi::OsString::from_wide(&buf[..len]).to_string_lossy().to_string());
+        }
+        None
+    }
+}
+
+pub fn detect_install_mode() -> InstallMode {
+    let exe_dir = match std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        Some(d) => d,
+        None => return InstallMode::Portable,
+    };
+    let exe_dir_n = normalize_path(&exe_dir);
+
+    // The uninstall entry written by our Inno Setup installer is authoritative.
+    if let Some(location) = read_uninstall_install_location() {
+        if normalize_path(std::path::Path::new(&location)) == exe_dir_n {
+            return InstallMode::Installed;
+        }
+    }
+
+    // Fallback: the default user-level install directory.
+    if let Some(local_app_data) = dirs::data_local_dir() {
+        let default_dir = local_app_data.join("Programs").join("BindX");
+        if normalize_path(&default_dir) == exe_dir_n {
+            return InstallMode::Installed;
+        }
+    }
+
+    InstallMode::Portable
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +157,7 @@ pub async fn check_for_updates(update_url: &str) -> Result<UpdateCheckResult, St
             release_notes: "云端仓库暂无新发布的 Release 版本，当前本地运行版本为最新。".to_string(),
             published_at: String::new(),
             download_url: String::new(),
+            setup_download_url: String::new(),
             release_page_url: "https://github.com/GOTOgxy/BindX/releases".to_string(),
         });
     }
@@ -99,6 +186,13 @@ pub async fn check_for_updates(update_url: &str) -> Result<UpdateCheckResult, St
         .map(|a| a.browser_download_url.clone())
         .unwrap_or_else(|| release.html_url.clone());
 
+    let setup_download_url = release
+        .assets
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case("bindx-setup.exe"))
+        .map(|a| a.browser_download_url.clone())
+        .unwrap_or_default();
+
     Ok(UpdateCheckResult {
         has_update,
         current_version: format!("v{}", current_version),
@@ -107,22 +201,22 @@ pub async fn check_for_updates(update_url: &str) -> Result<UpdateCheckResult, St
         release_notes: release.body.unwrap_or_default(),
         published_at: release.published_at.unwrap_or_default(),
         download_url,
+        setup_download_url,
         release_page_url: release.html_url,
     })
 }
 
-pub async fn download_and_install_update<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    download_url: String,
-) -> Result<(), String> {
+/// Stream `url` into `dest`, emitting update-progress events along the way.
+/// Returns the final file size after a sanity check.
+async fn download_with_progress<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<u64, String> {
     use std::io::Write;
 
-    let current_exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径: {}", e))?;
-    let exe_dir = current_exe.parent().ok_or_else(|| "无法获取程序所在目录".to_string())?;
-    let temp_file = exe_dir.join("bindx_update.tmp");
-
-    if temp_file.exists() {
-        let _ = std::fs::remove_file(&temp_file);
+    if dest.exists() {
+        let _ = std::fs::remove_file(dest);
     }
 
     let _ = app.emit("update-progress", UpdateProgress {
@@ -139,7 +233,7 @@ pub async fn download_and_install_update<R: tauri::Runtime>(
         .map_err(|e| format!("创建网络客户端失败: {}", e))?;
 
     let mut res = client
-        .get(&download_url)
+        .get(url)
         .header(USER_AGENT, "BindX-App")
         .send()
         .await
@@ -170,9 +264,9 @@ pub async fn download_and_install_update<R: tauri::Runtime>(
     let total_bytes = res.content_length().unwrap_or(0);
     let mut downloaded_bytes: u64 = 0;
 
-    let mut file = std::fs::File::create(&temp_file)
+    let mut file = std::fs::File::create(dest)
         .map_err(|e| {
-            let err = format!("无法创建临时文件 ({}): {}", temp_file.display(), e);
+            let err = format!("无法创建临时文件 ({}): {}", dest.display(), e);
             let _ = app.emit("update-progress", UpdateProgress {
                 status: "error".to_string(),
                 percent: 0.0,
@@ -233,10 +327,10 @@ pub async fn download_and_install_update<R: tauri::Runtime>(
     drop(file);
 
     // Verify downloaded file size
-    let meta = std::fs::metadata(&temp_file)
+    let meta = std::fs::metadata(dest)
         .map_err(|e| format!("读取已下载文件元信息失败: {}", e))?;
     if meta.len() < 1_000_000 {
-        let _ = std::fs::remove_file(&temp_file);
+        let _ = std::fs::remove_file(dest);
         let err = format!("下载文件异常 (大小仅 {} 字节)，可能下载不完整", meta.len());
         let _ = app.emit("update-progress", UpdateProgress {
             status: "error".to_string(),
@@ -248,11 +342,89 @@ pub async fn download_and_install_update<R: tauri::Runtime>(
         return Err(err);
     }
 
+    Ok(meta.len())
+}
+
+/// Installed-mode update: fetch the silent installer, run it over the original
+/// directory, then exit so the installer can replace the running executable.
+/// The installer relaunches BindX afterwards; config lives in %APPDATA% and is untouched.
+async fn install_via_setup<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    setup_url: String,
+) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let setup_path = std::env::temp_dir().join("bindx-setup-update.exe");
+    let size = download_with_progress(&app, &setup_url, &setup_path).await?;
+
     let _ = app.emit("update-progress", UpdateProgress {
         status: "applying".to_string(),
         percent: 100.0,
-        downloaded_bytes: meta.len(),
-        total_bytes: meta.len(),
+        downloaded_bytes: size,
+        total_bytes: size,
+        message: "下载完成，正在启动静默安装程序...".to_string(),
+    });
+
+    let spawned = std::process::Command::new(&setup_path)
+        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+        .spawn();
+
+    match spawned {
+        Ok(_) => {
+            let _ = app.emit("update-progress", UpdateProgress {
+                status: "done".to_string(),
+                percent: 100.0,
+                downloaded_bytes: size,
+                total_bytes: size,
+                message: "安装程序已启动，BindX 即将自动退出并完成覆盖安装（配置完整保留）...".to_string(),
+            });
+            // Give the progress event a moment to reach the webview before exiting.
+            std::thread::sleep(Duration::from_millis(600));
+            app.exit(0);
+            Ok(())
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&setup_path);
+            let err = format!("启动安装程序失败: {}", e);
+            let _ = app.emit("update-progress", UpdateProgress {
+                status: "error".to_string(),
+                percent: 0.0,
+                downloaded_bytes: size,
+                total_bytes: size,
+                message: err.clone(),
+            });
+            Err(err)
+        }
+    }
+}
+
+pub async fn download_and_install_update<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    download_url: String,
+    setup_download_url: Option<String>,
+) -> Result<(), String> {
+    // Installed deployments update by re-running the silent installer over the
+    // original directory; portable deployments keep the in-place exe swap.
+    if detect_install_mode() == InstallMode::Installed {
+        if let Some(setup_url) = setup_download_url.filter(|s| !s.trim().is_empty()) {
+            return install_via_setup(app, setup_url).await;
+        }
+    }
+
+    let current_exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径: {}", e))?;
+    let exe_dir = current_exe.parent().ok_or_else(|| "无法获取程序所在目录".to_string())?;
+    let temp_file = exe_dir.join("bindx_update.tmp");
+
+    let total = download_with_progress(&app, &download_url, &temp_file).await?;
+
+    let _ = app.emit("update-progress", UpdateProgress {
+        status: "applying".to_string(),
+        percent: 100.0,
+        downloaded_bytes: total,
+        total_bytes: total,
         message: "下载完成，正在替换程序文件...".to_string(),
     });
 
@@ -268,8 +440,8 @@ pub async fn download_and_install_update<R: tauri::Runtime>(
         let _ = app.emit("update-progress", UpdateProgress {
             status: "error".to_string(),
             percent: 0.0,
-            downloaded_bytes: meta.len(),
-            total_bytes,
+            downloaded_bytes: total,
+            total_bytes: total,
             message: err.clone(),
         });
         return Err(err);
@@ -283,8 +455,8 @@ pub async fn download_and_install_update<R: tauri::Runtime>(
         let _ = app.emit("update-progress", UpdateProgress {
             status: "error".to_string(),
             percent: 0.0,
-            downloaded_bytes: meta.len(),
-            total_bytes,
+            downloaded_bytes: total,
+            total_bytes: total,
             message: err.clone(),
         });
         return Err(err);
@@ -293,8 +465,8 @@ pub async fn download_and_install_update<R: tauri::Runtime>(
     let _ = app.emit("update-progress", UpdateProgress {
         status: "done".to_string(),
         percent: 100.0,
-        downloaded_bytes: meta.len(),
-        total_bytes: meta.len(),
+        downloaded_bytes: total,
+        total_bytes: total,
         message: "更新已成功就绪！点击立即重启生效。".to_string(),
     });
 

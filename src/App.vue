@@ -13,7 +13,7 @@
         </div>
         <div class="brand-text" data-tauri-drag-region>
           <span class="title" data-tauri-drag-region>BindX</span>
-          <span class="version-tag" data-tauri-drag-region>v2.0.3</span>
+          <span class="version-tag" data-tauri-drag-region>v{{ appVersion }}</span>
         </div>
       </div>
 
@@ -313,7 +313,7 @@
               <div class="integration-meta">
                 <div class="meta-item">
                   <span class="meta-label">当前版本</span>
-                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.3</span>
+                  <span class="meta-val font-mono text-indigo-600 font-semibold">v{{ appVersion }}</span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">开机自启</span>
@@ -795,7 +795,7 @@
                   </div>
                   <div>
                     <h3 class="hero-title">BindX</h3>
-                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v2.0.3</span></p>
+                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v{{ appVersion }}</span></p>
                   </div>
                 </div>
                 <div>
@@ -812,7 +812,7 @@
                 </div>
                 <div class="spec-row">
                   <span class="spec-name">运行规格</span>
-                  <span class="spec-val">独立绿色单文件</span>
+                  <span class="spec-val">{{ installMode === 'installed' ? '安装模式 · 静默覆盖更新' : '便携模式 · 独立绿色单文件' }}</span>
                 </div>
                 <div class="spec-row">
                   <span class="spec-name">内存占用</span>
@@ -901,14 +901,14 @@
                       <div class="flex gap-3">
                         <button class="btn btn-success flex-1" @click="onStartAutoUpdate">
                           <DownloadCloud class="w-4 h-4" />
-                          一键自动更新
+                          {{ installMode === 'installed' ? '一键静默更新' : '一键自动更新' }}
                         </button>
                         <button class="btn btn-secondary" @click="openUrl(updateInfo.release_page_url)">
                           发布页面
                         </button>
                       </div>
                       <div class="flex items-center justify-between text-xs text-dim px-0.5">
-                        <span>自动原地替换当前主程序，保留全部配置</span>
+                        <span>{{ installMode === 'installed' ? '静默覆盖安装到原安装目录，保留全部配置' : '自动原地替换当前主程序，保留全部配置' }}</span>
                         <a href="javascript:void(0)" class="text-indigo-600 hover:underline flex items-center gap-1" @click="openUrl(updateInfo.download_url)">
                           <span>浏览器下载</span>
                           <ExternalLink class="w-3 h-3" />
@@ -1416,13 +1416,60 @@
 
             <div v-if="browserPresetSelection === 'custom'" class="form-item col-span-2">
               <label class="form-label">自定义浏览器进程文件名</label>
-              <input 
-                type="text" 
-                class="input-field" 
+              <input
+                type="text"
+                class="input-field"
                 placeholder="例如: brave.exe、firefox.exe、360chrome.exe"
                 v-model="hotkeyModal.data.exe_name"
               />
               <span class="field-hint">限定只在该浏览器进程中查找网页</span>
+            </div>
+
+            <div class="form-item col-span-2">
+              <label class="form-label">打开形态</label>
+              <select class="input-field" v-model="hotkeyModal.data.tab_mode">
+                <option value="app_window">独立 app 窗口 (无标签栏地址栏，近似原生应用)</option>
+                <option value="tab">浏览器标签页 (在已有浏览器窗口内新开标签)</option>
+              </select>
+              <span class="field-hint">
+                标签找不到时自动重开所用的形态。独立 app 窗口以 --app 参数唤起浏览器，窗口标题仍为网页标题，快捷键切换照常生效。
+              </span>
+            </div>
+
+            <div v-if="hotkeyModal.data.tab_mode === 'app_window'" class="form-item col-span-2">
+              <label class="form-label">已安装应用检测 (实时)</label>
+              <div class="text-sm font-medium" :class="detectedWebApp ? 'text-emerald-600' : 'text-muted'">
+                {{ detectedWebApp
+                  ? '✓ 检测到已安装应用「' + detectedWebApp.name + '」，唤起时将使用完整应用身份'
+                  : '○ 未检测到该网址的已安装应用，届时以临时 app 窗口打开' }}
+              </div>
+              <span class="field-hint">
+                检测读取本机浏览器的开始菜单注册，实时跟随上面的目标网址变化；结果不写入配置、不绑定本机，云同步到其他设备后各自检测。想要完整应用身份（应用菜单/固定任务栏等），可先在浏览器里把该站"安装为应用"。
+              </span>
+            </div>
+
+            <div class="form-item col-span-2">
+              <label class="form-label">目标网址 (可选)</label>
+              <input
+                type="text"
+                class="input-field"
+                placeholder="例如: https://chat.qwen.ai ，留空则标签丢失时不自动打开"
+                v-model="hotkeyModal.data.tab_url"
+              />
+              <span class="field-hint">
+                标签页被关闭后按快捷键时，将重新打开该网址：浏览器已运行则新建标签页，未运行则带着网址启动浏览器。
+              </span>
+            </div>
+
+            <div class="form-item col-span-2 flex items-center justify-between pt-1">
+              <div>
+                <span class="font-medium text-sm text-main">标签不存在时自动打开</span>
+                <p class="text-xs text-muted">找不到匹配的标签页时，自动重新打开上面的目标网址（需填写网址，留空无法保存）</p>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" v-model="hotkeyModal.data.launch_if_not_running" />
+                <span class="slider"></span>
+              </label>
             </div>
           </template>
 
@@ -1691,7 +1738,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -2045,6 +2092,42 @@ const onHotkeyRecordKeyDown = (e) => {
 
 const browserPresetSelection = ref('auto')
 
+const detectedWebApp = ref(null)
+let detectTimer = null
+
+// Live-detect the browser's installed web app for the entry's target URL.
+// Runs per machine at edit time (and again at trigger time in the backend);
+// nothing machine-specific is persisted.
+const redetectInstalledWebApp = () => {
+  clearTimeout(detectTimer)
+  detectTimer = setTimeout(async () => {
+    const d = hotkeyModal.value.data
+    if (!hotkeyModal.value.show || d.target_type !== 'browser_tab' || d.tab_mode !== 'app_window' || !(d.tab_url || '').trim()) {
+      detectedWebApp.value = null
+      return
+    }
+    try {
+      detectedWebApp.value = await invoke('detect_installed_web_app', {
+        url: d.tab_url,
+        hints: [d.title_keyword, d.name].filter(Boolean)
+      })
+    } catch (e) {
+      detectedWebApp.value = null
+    }
+  }, 250)
+}
+
+watch(
+  () => [
+    hotkeyModal.value.show,
+    hotkeyModal.value.data.tab_url,
+    hotkeyModal.value.data.tab_mode,
+    hotkeyModal.value.data.title_keyword,
+    hotkeyModal.value.data.name
+  ],
+  redetectInstalledWebApp
+)
+
 const updateBrowserPresetSelectionFromData = () => {
   const exe = (hotkeyModal.value.data.exe_name || '').trim().toLowerCase()
   if (!exe) {
@@ -2075,6 +2158,9 @@ const onBrowserPresetChange = () => {
 const onTargetTypeChange = (val) => {
   hotkeyModal.value.data.target_type = val
   if (val === 'browser_tab') {
+    if (!hotkeyModal.value.data.tab_mode) {
+      hotkeyModal.value.data.tab_mode = 'app_window'
+    }
     updateBrowserPresetSelectionFromData()
   }
 }
@@ -2096,6 +2182,8 @@ const openAddHotkeyModal = () => {
       target_type: 'win32',
       exe_name: '',
       title_keyword: '',
+      tab_url: '',
+      tab_mode: 'app_window',
       _runtime_profile: {
         hide_behavior: 'minimize',
         show_behavior: 'activate_window'
@@ -2116,6 +2204,16 @@ const editHotkey = (entry, index) => {
   }
   if (!data.target_type || data.target_type === 'builtin') {
     data.target_type = 'win32'
+  }
+  if (data.tab_url === undefined) {
+    data.tab_url = ''
+  }
+  if (!data.tab_mode) {
+    // Legacy entries predate the form option and always opened as browser tabs.
+    data.tab_mode = 'tab'
+  }
+  if (data.launch_if_not_running === undefined) {
+    data.launch_if_not_running = true
   }
   hotkeyModal.value = {
     show: true,
@@ -2196,7 +2294,6 @@ const applyHotkeyPreset = (preset) => {
       hotkeyModal.value.data.exe_name = ''
       hotkeyModal.value.data.title_keyword = hotkeyModal.value.data.title_keyword || '千问'
       hotkeyModal.value.data.install_path = ''
-      hotkeyModal.value.data.launch_if_not_running = false
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
       updateBrowserPresetSelectionFromData()
       break
@@ -2266,7 +2363,11 @@ const saveHotkeyModal = async () => {
       hotkeyModal.value.data.exe_name = ''
     }
     hotkeyModal.value.data.install_path = ''
-    hotkeyModal.value.data.launch_if_not_running = false
+    hotkeyModal.value.data.tab_url = (hotkeyModal.value.data.tab_url || '').trim()
+    if (hotkeyModal.value.data.launch_if_not_running && !hotkeyModal.value.data.tab_url) {
+      showToast('开启"标签不存在时自动打开"必须填写目标网址，否则标签关闭后无法知道该重新打开哪个网页', 'danger', 6000)
+      return
+    }
   }
   if (hotkeyModal.value.isEdit) {
     config.value.hotkeys.entries[hotkeyModal.value.index] = hotkeyModal.value.data
@@ -2764,6 +2865,9 @@ const updateProgress = ref({
   message: '',
 })
 
+const installMode = ref('portable') // 'portable' | 'installed'
+const appVersion = ref('0.0.0')
+
 const onCheckUpdate = async () => {
   checkingUpdate.value = true
   try {
@@ -2795,7 +2899,10 @@ const onStartAutoUpdate = async () => {
     message: '正在准备下载...',
   }
   try {
-    await invoke('start_auto_update', { downloadUrl: updateInfo.value.download_url })
+    await invoke('start_auto_update', {
+      downloadUrl: updateInfo.value.download_url,
+      setupDownloadUrl: updateInfo.value.setup_download_url || null
+    })
   } catch (e) {
     updateProgress.value = {
       status: 'error',
@@ -2938,6 +3045,22 @@ const onCreateDesktop = async () => {
 onMounted(async () => {
   fetchConfig()
   checkStartMenuStatus()
+  try {
+    installMode.value = await invoke('get_install_mode')
+  } catch (e) {}
+  try {
+    appVersion.value = await invoke('get_app_version')
+  } catch (e) {}
+  // Global ESC: close the topmost open modal. While a key recorder owns the focus,
+  // its keydown handler stops propagation, so ESC there is recorded instead of closing.
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return
+    if (hotkeyModal.value.show) {
+      closeHotkeyModal()
+    } else if (remapModal.value.show) {
+      closeRemapModal()
+    }
+  })
   try {
     await listen('update-progress', (event) => {
       if (event && event.payload) {

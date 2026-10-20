@@ -46,21 +46,21 @@ jobs:
           Write-Host "Found bindx.exe at: $($exe.FullName)"
           Copy-Item $exe.FullName -Destination "bindx.exe" -Force
 
-          # 2. Package portable zip with both bindx.exe and WebView2Loader.dll if present
+          # 2. Portable zip: the single executable and nothing else
           New-Item -ItemType Directory -Path "bindx-portable" -Force
           Copy-Item "bindx.exe" -Destination "bindx-portable\bindx.exe" -Force
-
-          $dll = Get-ChildItem -Path $exe.DirectoryName -Filter "WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $dll) {
-              $dll = Get-ChildItem -Path . -Recurse -Filter "WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          if ($dll) {
-              Write-Host "Found WebView2Loader.dll at: $($dll.FullName)"
-              Copy-Item $dll.FullName -Destination "bindx-portable\WebView2Loader.dll" -Force
-          }
-
           Compress-Archive -Path "bindx-portable\*" -DestinationPath "bindx-windows-x64-portable.zip" -Force
-          Write-Host "Created bindx-windows-x64-portable.zip"
+          Write-Host "Created bindx-windows-x64-portable.zip (exe only)"
+
+          # 3. Installer: compile the Inno Setup script into bindx-setup.exe
+          $version = (Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).version
+          Copy-Item "bindx.exe" -Destination "installer\bindx.exe" -Force
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "iscc" }
+          & $iscc /DMyAppVersion=$version "installer\bindx.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          Move-Item "installer\Output\bindx-setup.exe" -Destination "bindx-setup.exe" -Force
+          Write-Host "Created bindx-setup.exe"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -68,6 +68,7 @@ jobs:
           files: |
             bindx.exe
             bindx-windows-x64-portable.zip
+            bindx-setup.exe
           tag_name: ${{ github.ref_name }}
           name: BindX ${{ github.ref_name }}
           draft: false

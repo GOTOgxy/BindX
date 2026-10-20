@@ -65,7 +65,7 @@ fn default_output_delay() -> u64 {
 pub struct HotkeyEntry {
     pub app: String,
     pub hotkey: String,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub launch_if_not_running: bool,
     #[serde(default)]
     pub install_path: String,
@@ -81,6 +81,12 @@ pub struct HotkeyEntry {
     pub exe_name: Option<String>,
     #[serde(default)]
     pub title_keyword: Option<String>,
+    #[serde(default)]
+    pub tab_url: Option<String>,
+    /// Reopen form for browser_tab entries: "tab" (legacy default) or "app_window"
+    /// (standalone browser app-mode window via --app=<url>).
+    #[serde(default)]
+    pub tab_mode: Option<String>,
     #[serde(default)]
     pub tray_aware: Option<bool>,
     #[serde(flatten)]

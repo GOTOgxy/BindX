@@ -1,6 +1,7 @@
 use crate::config::HotkeyEntry;
 use crate::engine::win32::{
-    find_window, get_vk_code, launch_app, resolve_app_executable_path, toggle_app_window,
+    find_installed_web_app_for_url, find_window, get_vk_code, launch_app, launch_installed_web_app,
+    open_url_in_browser, resolve_app_executable_path, toggle_app_window,
 };
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -288,19 +289,50 @@ fn handle_hotkey_trigger(
 
     if let Some(hwnd) = find_window(exe_name, title_keyword) {
         toggle_app_window(hwnd, hide_behavior);
-    } else {
-        // Window was not found!
-        // Either the app is running in tray without an active window (e.g. NetEase Cloud Music),
-        // or the app has not been launched yet.
-        let mut launch_target: Option<String> = None;
-        if !entry.install_path.trim().is_empty() {
-            launch_target = Some(entry.install_path.clone());
-        } else if let Some(target_exe) = exe_name {
-            launch_target = resolve_app_executable_path(target_exe);
-        }
+        return;
+    }
 
-        if let Some(target) = launch_target {
-            let _ = launch_app(&target);
+    // Window was not found!
+    // Either the app is running in tray without an active window (e.g. NetEase Cloud Music),
+    // or the app has not been launched yet.
+    if !entry.launch_if_not_running {
+        return;
+    }
+
+    if entry.target_type.as_deref() == Some("browser_tab") {
+        // For a browser tab, "launching" means reopening the target URL: ShellExecute
+        // hands the URL to the running browser (new tab in the existing window) or starts
+        // the browser with that URL. Never spawn a bare browser window. Without a
+        // configured URL there is nothing to reopen, so stay quiet.
+        if let Some(url) = entry.tab_url.as_deref().filter(|u| !u.trim().is_empty()) {
+            let app_window = entry.tab_mode.as_deref() == Some("app_window");
+            // Prefer the installed web app (full browser identity: app menu, pins).
+            // Detection is per-machine at trigger time; nothing machine-specific is
+            // stored in the config, so synced entries work everywhere.
+            if app_window {
+                let hints: Vec<String> = [entry.title_keyword.clone(), entry.name.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                if let Some(a) = find_installed_web_app_for_url(url, &hints) {
+                    if launch_installed_web_app(&a.browser_exe, &a.profile, &a.id).is_ok() {
+                        return;
+                    }
+                }
+            }
+            let _ = open_url_in_browser(url, exe_name, app_window);
         }
+        return;
+    }
+
+    let mut launch_target: Option<String> = None;
+    if !entry.install_path.trim().is_empty() {
+        launch_target = Some(entry.install_path.clone());
+    } else if let Some(target_exe) = exe_name {
+        launch_target = resolve_app_executable_path(target_exe);
+    }
+
+    if let Some(target) = launch_target {
+        let _ = launch_app(&target);
     }
 }

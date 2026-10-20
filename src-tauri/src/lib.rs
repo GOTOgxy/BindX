@@ -127,6 +127,9 @@ pub fn run() {
             get_config_path_info,
             open_config_folder,
             start_auto_update,
+            get_install_mode,
+            get_app_version,
+            detect_installed_web_app,
             restart_app
         ])
         .run(tauri::generate_context!())
