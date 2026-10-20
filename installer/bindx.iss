@@ -37,13 +37,16 @@ UninstallDisplayName={#MyAppName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesInstallIn64BitMode=x64
 ; BindX is stopped explicitly in [Code]; let the Restart Manager stay out of it.
 CloseApplications=false
 RestartApplications=false
 
 [Languages]
+; CI passes /DNO_ZH when the runner's Inno Setup lacks the Chinese translation.
+#ifndef NO_ZH
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+#endif
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]

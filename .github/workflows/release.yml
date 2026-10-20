@@ -55,12 +55,36 @@ jobs:
           # 3. Installer: compile the Inno Setup script into bindx-setup.exe
           $version = (Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).version
           Copy-Item "bindx.exe" -Destination "installer\bindx.exe" -Force
-          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { $iscc = "iscc" }
-          & $iscc /DMyAppVersion=$version "installer\bindx.iss"
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $iscc = $null
+          foreach ($candidate in @(
+              (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+              (Join-Path ${env:ProgramFiles} "Inno Setup 6\ISCC.exe"),
+              (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 5\ISCC.exe")
+          )) {
+              if (Test-Path $candidate) { $iscc = $candidate; break }
+          }
+          if (-not $iscc) { $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source }
+          if (-not $iscc) { throw "ISCC.exe not found on runner" }
+          Write-Host "Using ISCC: $iscc"
+          $zhArgs = @()
+          $zhIsl = Join-Path (Split-Path $iscc -Parent) "Languages\ChineseSimplified.isl"
+          if (-not (Test-Path $zhIsl)) { $zhArgs = @("/DNO_ZH"); Write-Host "ChineseSimplified.isl absent, compiling with English only" }
+          $isccOut = & $iscc @zhArgs /DMyAppVersion=$version "installer\bindx.iss" 2>&1 | Out-String
+          Write-Host $isccOut
+          if ($LASTEXITCODE -ne 0) {
+              Set-Content -Path "iscc-failure.log" -Value $isccOut
+              throw "ISCC failed with exit code $LASTEXITCODE (see iscc-failure.log artifact)"
+          }
           Move-Item "installer\Output\bindx-setup.exe" -Destination "bindx-setup.exe" -Force
           Write-Host "Created bindx-setup.exe"
+
+      - name: Upload ISCC failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iscc-failure-log
+          path: iscc-failure.log
+          if-no-files-found: ignore
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
