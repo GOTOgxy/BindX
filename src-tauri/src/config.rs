@@ -204,6 +204,12 @@ pub fn get_config_path() -> PathBuf {
     // 1. Check relative data/bindx_config.json
     let p = PathBuf::from("data/bindx_config.json");
     if p.exists() {
+        if let Ok(abs) = std::fs::canonicalize(&p) {
+            return abs;
+        }
+        if let Ok(cd) = std::env::current_dir() {
+            return cd.join(&p);
+        }
         return p;
     }
 
@@ -214,16 +220,23 @@ pub fn get_config_path() -> PathBuf {
             if p.exists() {
                 return p;
             }
+            let data_dir = parent.join("data");
+            if data_dir.is_dir() {
+                return data_dir.join("bindx_config.json");
+            }
         }
     }
 
-    // 3. Fallback to AppData / BindX
+    // 3. Standard Windows AppData directory (%APPDATA%/BindX/bindx_config.json)
     if let Some(app_data) = dirs::data_dir() {
-        let p = app_data.join("BindX").join("bindx_config.json");
-        return p;
+        return app_data.join("BindX").join("bindx_config.json");
     }
 
-    PathBuf::from("bindx_config.json")
+    if let Ok(cd) = std::env::current_dir() {
+        cd.join("bindx_config.json")
+    } else {
+        PathBuf::from("bindx_config.json")
+    }
 }
 
 pub fn load_config() -> BindxConfig {

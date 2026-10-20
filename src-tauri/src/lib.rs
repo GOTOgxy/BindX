@@ -109,7 +109,9 @@ pub fn run() {
             check_start_menu_status,
             toggle_start_menu_shortcut,
             locate_start_menu_shortcut,
-            create_desktop_shortcut
+            create_desktop_shortcut,
+            get_config_path_info,
+            open_config_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

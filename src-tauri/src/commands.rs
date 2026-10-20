@@ -1,9 +1,9 @@
 use crate::autostart::{is_autostart_enabled, set_autostart};
-use crate::config::{load_config, save_config, BindxConfig, WebDavConfig};
+use crate::config::{get_config_path, load_config, save_config, BindxConfig, WebDavConfig};
 use crate::engine::{HotkeyEngine, RemapEngine};
 use crate::updater::{check_for_updates, UpdateCheckResult};
 use crate::webdav::WebDavClient;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
 
@@ -327,3 +327,66 @@ pub fn create_desktop_shortcut() -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigPathInfo {
+    pub full_path: String,
+    pub dir_path: String,
+    pub exists: bool,
+}
+
+#[tauri::command]
+pub fn get_config_path_info() -> Result<ConfigPathInfo, String> {
+    let path = get_config_path();
+    let path_str = path.to_string_lossy().to_string();
+    let clean_path = if path_str.starts_with(r"\\?\") {
+        path_str[4..].to_string()
+    } else {
+        path_str
+    };
+    let dir = std::path::PathBuf::from(&clean_path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    Ok(ConfigPathInfo {
+        full_path: clean_path,
+        dir_path: dir,
+        exists: path.exists(),
+    })
+}
+
+#[tauri::command]
+pub fn open_config_folder() -> Result<(), String> {
+    let path = get_config_path();
+    let path_str = path.to_string_lossy().to_string();
+    let clean_path = if path_str.starts_with(r"\\?\") {
+        path_str[4..].to_string()
+    } else {
+        path_str
+    };
+
+    let p = std::path::PathBuf::from(&clean_path);
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // If config file does not exist yet on disk, save the current configuration
+    if !p.exists() {
+        let cfg = load_config();
+        let _ = save_config(&cfg);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        if p.exists() {
+            let arg = format!("/select,\"{}\"", clean_path);
+            let _ = Command::new("explorer").arg(&arg).spawn();
+            return Ok(());
+        }
+    }
+
+    let dir = p.parent().unwrap_or(&p);
+    open::that(dir).map_err(|e| format!("打开配置文件目录失败: {}", e))?;
+    Ok(())
+}

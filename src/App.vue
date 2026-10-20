@@ -13,7 +13,7 @@
         </div>
         <div class="brand-text" data-tauri-drag-region>
           <span class="title" data-tauri-drag-region>BindX</span>
-          <span class="version-tag" data-tauri-drag-region>v2.0.1</span>
+          <span class="version-tag" data-tauri-drag-region>v2.0.2</span>
         </div>
       </div>
 
@@ -313,7 +313,7 @@
               <div class="integration-meta">
                 <div class="meta-item">
                   <span class="meta-label">当前版本</span>
-                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.1</span>
+                  <span class="meta-val font-mono text-indigo-600 font-semibold">v2.0.2</span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">开机自启</span>
@@ -795,7 +795,7 @@
                   </div>
                   <div>
                     <h3 class="hero-title">BindX</h3>
-                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v2.0.1</span></p>
+                    <p class="hero-ver">当前版本: <span class="font-mono font-semibold text-indigo-600">v2.0.2</span></p>
                   </div>
                 </div>
                 <div>
@@ -1060,11 +1060,17 @@
                 </div>
                 <div class="tile-content">
                   <span class="tile-title">配置文件路径</span>
-                  <span class="tile-desc">规则与设置持久化存储于本地 JSON 文件</span>
+                  <span class="tile-desc">当前生效的本地配置存储位置（{{ configPathInfo.exists ? '文件已生成' : '保存设置后自动生成' }}）</span>
                 </div>
                 <div class="tile-action-path">
-                  <span class="path-badge">data/bindx_config.json</span>
-                  <button class="btn btn-secondary text-xs" title="在资源管理器中打开" @click="openDataFolder">
+                  <span 
+                    class="path-badge" 
+                    :title="'点击复制完整路径: ' + (configPathInfo.full_path || '')" 
+                    @click="copyConfigPath"
+                  >
+                    {{ configPathInfo.full_path || '正在读取配置路径...' }}
+                  </span>
+                  <button class="btn btn-secondary text-xs" title="在资源管理器中高亮定位配置文件" @click="openDataFolder">
                     <FolderOpen class="w-3.5 h-3.5" />
                     <span>打开所在目录</span>
                   </button>
@@ -1819,6 +1825,7 @@ const fetchConfig = async () => {
       if (!data.mouse.mappings) data.mouse.mappings = []
       config.value = data
     }
+    await refreshConfigPathInfo()
   } catch (e) {
     showToast('加载配置失败: ' + e, 'danger')
   }
@@ -1828,6 +1835,7 @@ const fetchConfig = async () => {
 const saveAll = async () => {
   try {
     await invoke('update_config', { newConfig: config.value })
+    await refreshConfigPathInfo()
     showToast('设置已保存', 'success')
   } catch (e) {
     showToast('保存失败: ' + e, 'danger')
@@ -2610,6 +2618,8 @@ const downloadingWebDav = ref(false)
 const onTestWebDav = async () => {
   testingWebDav.value = true
   try {
+    await invoke('update_config', { newConfig: config.value })
+    await refreshConfigPathInfo()
     const res = await invoke('test_webdav', { config: config.value.webdav })
     showToast(res, 'success')
   } catch (e) {
@@ -2634,9 +2644,15 @@ const onUploadWebDav = async () => {
 const onDownloadWebDav = async () => {
   downloadingWebDav.value = true
   try {
+    const currentWebDav = JSON.parse(JSON.stringify(config.value.webdav))
     const downloaded = await invoke('download_from_webdav', { config: config.value.webdav })
+    // Preserve currently active WebDAV connection credentials
+    if (currentWebDav && currentWebDav.server_url) {
+      downloaded.webdav = currentWebDav
+    }
     config.value = downloaded
-    showToast('配置同步成功', 'success')
+    await refreshConfigPathInfo()
+    showToast('配置同步成功，已保留当前云服务器连接设置', 'success')
   } catch (e) {
     showToast('同步失败: ' + e, 'danger', 5000)
   } finally {
@@ -2695,11 +2711,33 @@ const openUrl = async (url) => {
   }
 }
 
+const configPathInfo = ref({ full_path: '', dir_path: '', exists: false })
+
+const refreshConfigPathInfo = async () => {
+  try {
+    const info = await invoke('get_config_path_info')
+    if (info) {
+      configPathInfo.value = info
+    }
+  } catch (e) {
+    console.warn('获取配置文件路径失败:', e)
+  }
+}
+
+const copyConfigPath = () => {
+  if (!configPathInfo.value.full_path) return
+  navigator.clipboard.writeText(configPathInfo.value.full_path)
+    .then(() => showToast('配置文件路径已复制到剪贴板', 'info'))
+    .catch(() => showToast(configPathInfo.value.full_path, 'info'))
+}
+
 const openDataFolder = async () => {
   try {
-    await invoke('open_external_url', { url: 'data' })
+    await invoke('open_config_folder')
+    await refreshConfigPathInfo()
+    showToast('已在资源管理器中定位配置文件', 'success')
   } catch (e) {
-    showToast('打开数据目录失败: ' + e, 'danger')
+    showToast('打开配置文件目录失败: ' + e, 'danger')
   }
 }
 
@@ -4302,12 +4340,23 @@ onMounted(() => {
 }
 .path-badge {
   font-family: monospace;
-  font-size: 12px;
+  font-size: 11px;
   padding: 6px 12px;
   border-radius: 8px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.path-badge:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 .tile-action-buttons {
   display: flex;

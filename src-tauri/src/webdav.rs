@@ -153,9 +153,15 @@ impl WebDavClient {
         let parsed_config: BindxConfig = serde_json::from_str(&body)
             .map_err(|e| format!("云端配置解析失败（格式不兼容或非合法 JSON）: {}", e))?;
 
-        // Save downloaded config to local disk
-        save_config(&parsed_config)?;
+        // Preserve current active WebDAV credentials so download does not wipe them out
+        let mut final_config = parsed_config;
+        if !cfg.server_url.trim().is_empty() {
+            final_config.webdav = cfg.clone();
+        }
 
-        Ok(parsed_config)
+        // Save downloaded config to local disk
+        save_config(&final_config)?;
+
+        Ok(final_config)
     }
 }
