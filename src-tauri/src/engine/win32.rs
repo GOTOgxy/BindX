@@ -880,6 +880,133 @@ pub fn launch_installed_web_app(
         .map_err(|e| format!("启动已安装网页应用失败: {}", e))
 }
 
+/// Look up an app's install path via the uninstall registry (HKCU/HKLM, both
+/// 64/32-bit views). Catches per-user installers (Termius, VS Code, etc.) that
+/// have no App Paths entry. Matches DisplayName prefix, then prefers
+/// DisplayIcon and falls back to InstallLocation\<exe>.
+fn find_app_path_from_uninstall(exe_name: &str) -> Option<String> {
+    use windows::Win32::System::Registry::{RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY};
+    let base = exe_name.to_lowercase();
+    let base = base.trim_end_matches(".exe");
+
+    unsafe extern "system" fn reg_string(
+        hkey: HKEY,
+        value: &str,
+    ) -> Option<String> {
+        use windows::Win32::System::Registry::RegQueryValueExW;
+        let value_wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let mut buf = vec![0u16; 512];
+            let mut cb_data = (buf.len() * 2) as u32;
+            let mut reg_type = REG_SZ;
+            let status = RegQueryValueExW(
+                hkey,
+                windows::core::PCWSTR(value_wide.as_ptr()),
+                None,
+                Some(&mut reg_type),
+                Some(buf.as_mut_ptr() as *mut u8),
+                Some(&mut cb_data),
+            );
+            if status.is_ok() && cb_data > 0 {
+                let len = (cb_data as usize / 2).saturating_sub(1);
+                return Some(OsString::from_wide(&buf[..len]).to_string_lossy().to_string());
+            }
+            None
+        }
+    }
+
+    unsafe {
+        for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+            for view in [
+                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+                "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            ] {
+                let view_wide: Vec<u16> = view.encode_utf16().chain(std::iter::once(0)).collect();
+                let mut hkey = HKEY::default();
+                if RegOpenKeyExW(
+                    root,
+                    windows::core::PCWSTR(view_wide.as_ptr()),
+                    0,
+                    KEY_READ,
+                    &mut hkey,
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                let mut index = 0u32;
+                loop {
+                    let mut name_buf = [0u16; 256];
+                    let mut name_len = name_buf.len() as u32;
+                    let rc = RegEnumKeyExW(
+                        hkey,
+                        index,
+                        windows::core::PWSTR(name_buf.as_mut_ptr()),
+                        &mut name_len,
+                        None,
+                        windows::core::PWSTR::null(),
+                        None,
+                        None,
+                    );
+                    if rc.is_err() {
+                        break;
+                    }
+                    index += 1;
+                    let mut sub = HKEY::default();
+                    let sub_wide: Vec<u16> = OsString::from_wide(&name_buf[..name_len as usize])
+                        .to_string_lossy()
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    if RegOpenKeyExW(
+                        hkey,
+                        windows::core::PCWSTR(sub_wide.as_ptr()),
+                        0,
+                        KEY_READ,
+                        &mut sub,
+                    )
+                    .is_err()
+                    {
+                        continue;
+                    }
+                    let display = reg_string(sub, "DisplayName").unwrap_or_default();
+                    let matched = display.to_lowercase().starts_with(base);
+                    let mut found = None;
+                    if matched {
+                        if let Some(icon) = reg_string(sub, "DisplayIcon") {
+                            let cand = icon
+                                .trim_matches('"')
+                                .split(',')
+                                .next()
+                                .unwrap_or_default()
+                                .trim()
+                                .to_string();
+                            if cand.to_lowercase().ends_with(".exe") && Path::new(&cand).is_file() {
+                                found = Some(cand);
+                            }
+                        }
+                        if found.is_none() {
+                            if let Some(loc) = reg_string(sub, "InstallLocation") {
+                                let cand = Path::new(loc.trim_matches('"')).join(exe_name);
+                                if cand.is_file() {
+                                    found = Some(cand.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                    let _ = RegCloseKey(sub);
+                    if let Some(p) = found {
+                        let _ = RegCloseKey(hkey);
+                        return Some(p);
+                    }
+                }
+                let _ = RegCloseKey(hkey);
+            }
+        }
+        None
+    }
+}
+
 pub fn resolve_app_executable_path(exe_name: &str) -> Option<String> {
     if let Some(p) = find_running_process_path(exe_name) {
         return Some(p);
@@ -887,16 +1014,31 @@ pub fn resolve_app_executable_path(exe_name: &str) -> Option<String> {
     if let Some(p) = find_app_path_from_registry(exe_name) {
         return Some(p);
     }
-    let common_dirs = [
-        r"C:\Program Files",
-        r"C:\Program Files (x86)",
-        r"D:\Program Files",
-        r"D:\Program Files (x86)",
+    if let Some(p) = find_app_path_from_uninstall(exe_name) {
+        return Some(p);
+    }
+    let mut common_dirs: Vec<String> = vec![
+        r"C:\Program Files".to_string(),
+        r"C:\Program Files (x86)".to_string(),
+        r"D:\Program Files".to_string(),
+        r"D:\Program Files (x86)".to_string(),
     ];
+    if let Some(local) = dirs::data_local_dir() {
+        common_dirs.push(local.join("Programs").to_string_lossy().to_string());
+    }
     for dir in &common_dirs {
         let candidate = Path::new(dir).join(exe_name);
         if candidate.exists() {
             return Some(candidate.to_string_lossy().to_string());
+        }
+        // Per-user installers nest one level deep (e.g. %LOCALAPPDATA%\Programs\Termius\Termius.exe)
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for ent in rd.flatten() {
+                let candidate = ent.path().join(exe_name);
+                if candidate.is_file() {
+                    return Some(candidate.to_string_lossy().to_string());
+                }
+            }
         }
     }
     None

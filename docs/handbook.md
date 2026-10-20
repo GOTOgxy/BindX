@@ -1,11 +1,11 @@
 # BindX 手册
 
-> 适用版本：v2.1.0+。本文档描述 BindX 各子系统的**实际行为与实现逻辑**，与代码同步维护。
+> 适用版本：v2.1.1+。本文档描述 BindX 各子系统的**实际行为与实现逻辑**，与代码同步维护。
 > 章节：① 快捷键目标类型 ② 按键映射 ③ 配置读取与云同步 ④ 安装与更新 ⑤ 开发与打包编译
 
 ---
 
-## 一、快捷键目标类型：网页标签 / 桌面客户端 / 内置应用
+## 一、快捷键目标类型：网页应用 / 桌面客户端 / 内置应用
 
 每条快捷键规则（`hotkeys.entries[]`）由 `target_type` 决定其行为族：
 
@@ -13,7 +13,7 @@
 |------|--------------|---------|---------|
 | 桌面客户端 | `win32`（默认） | 进程名 `exe_name` / 安装路径 `install_path` | 网易云音乐、VS Code |
 | 内置应用 | `builtin`（UI 已并入 win32） | 预设名 → 进程名映射表 | 微信、Termius、Zotero |
-| 网页标签 | `browser_tab` | 浏览器进程 + 标签标题关键字 `title_keyword` | 千问、Gemini、ChatGPT |
+| 网页应用 | `browser_tab` | 浏览器进程 + 标签标题关键字 `title_keyword` | 千问、Gemini、ChatGPT |
 
 ### 1.1 通用条目字段
 
@@ -24,8 +24,8 @@
 | `launch_if_not_running` | 找不到窗口时是否允许"启动/重开"（serde 默认 `true` 兼容旧配置） |
 | `install_path` / `exe_name` | 显式路径 / 进程名；留空时自动解析 |
 | `_runtime_profile.hide_behavior` | 命中窗口后的切换行为：`minimize`（默认）/ `tray` / `hide` |
-| `title_keyword` | 窗口标题关键字（网页标签必填；桌面客户端可选作窗口过滤） |
-| `tab_url` / `tab_mode` | 仅网页标签：重开网址 / 重开形态（`tab` 或 `app_window`） |
+| `title_keyword` | 窗口标题关键字（网页应用必填；桌面客户端可选作窗口过滤） |
+| `tab_url` / `tab_mode` | 仅网页应用：重开网址 / 重开形态（`tab` 或 `app_window`） |
 
 ### 1.2 统一触发流程
 
@@ -38,11 +38,11 @@
                  └─ true → 按目标类型启动（见下）
 ```
 
-- **桌面客户端**：`install_path` 优先；否则 `exe_name` 依次按 *运行中进程路径 → App Paths 注册表 → 常见安装目录* 解析，再 `launch_app`。
+- **桌面客户端**：`install_path` 优先；否则 `exe_name` 依次按 *运行中进程路径 → App Paths 注册表 → 卸载注册表（DisplayName 前缀匹配 → DisplayIcon / InstallLocation）→ 常见安装目录（含 `%LOCALAPPDATA%\Programs` 一级子目录，覆盖 Termius 等按用户安装的程序）* 解析，再 `launch_app`。
 - **内置应用**：未填 `exe_name` 时按预设表映射（cloudmusic→`cloudmusic.exe`、wechat→`WeChat.exe`、termius、zotero、vscode→`Code.exe`、terminal→`wt.exe`）。
-- **网页标签**：见 1.3。
+- **网页应用**：见 1.3。
 
-### 1.3 网页标签：行为与重开逻辑
+### 1.3 网页应用：行为与重开逻辑
 
 **命中判定**：在选定浏览器进程（`auto` = 所有浏览器 / `msedge.exe` / `chrome.exe` / 自定义）中查找标题包含 `title_keyword` 的窗口。浏览器把活动标签标题显示在窗口标题上，因此"标签"在 OS 层就是一个可匹配窗口。
 
@@ -75,7 +75,8 @@
 
 ### 1.4 界面约定
 
-- 所有编辑弹窗（快捷键/按键映射）在**非录制状态**下按 `ESC` 关闭；录制框内 `ESC` 被录制为按键（录制处理器 `stopPropagation`）。
+- 所有编辑弹窗（快捷键/按键映射）在**非录制状态**下按 `ESC` 关闭；录制中 `ESC` 被录制为按键（捕获监听处于 capture 阶段并 `stopPropagation`）。
+- 校验警告（如开关开启但未填网址）以 toast 提示，层级高于模态框，填写页内直接可见。
 - 版本号各处（标题栏/概览/更新页）统一读取后端 `CARGO_PKG_VERSION`，不再硬编码。
 
 ---
@@ -103,6 +104,7 @@
 - **鼠标命中**：`WM_XBUTTONDOWN` 取 `mouseData` 高字识别 X1/X2，同样校验组合中其余键。
 - **输出**：独立线程 `send_key_sequence`——顺序按下、逆序抬起；每个合成输入带 `dwExtraInfo = BINDX_EXTRA_INFO` 自标记，钩子见到自标记直接放行，**防止自我触发环路**。
 - **录制隔离**：UI 进入录制时 `set_recording_paused(true)` 暂停钩子拦截，保证录制能捕获原始按键（含 ESC）。
+- **录制交互**：按下录制按钮后，捕获由**窗口级 capture 阶段监听**完成——窗口内任意位置按键即录（触发键另含鼠标侧键，走窗口级 `pointerdown` 捕获），无需先点击特定区域；未录制时输入框正常手动输入。编辑区为两行布局（标签+按钮行、输入框行）。
 - 配置项 `app.output_delay_ms`、`app.restore_held_modifiers` 目前在 UI 暴露但后端尚未消费（保留项）。
 
 ---

@@ -1270,7 +1270,7 @@
                 class="preset-chip" 
                 @click="applyHotkeyPreset('browser_tab')"
               >
-                网页标签页
+                网页应用
               </button>
             </div>
           </div>
@@ -1303,51 +1303,22 @@
               </div>
             </div>
 
-            <!-- Manual Editable Input Field -->
-            <div class="relative flex items-center mb-2">
-              <input 
-                type="text" 
-                class="input-field font-mono font-medium pr-10" 
+            <!-- Manual input doubles as the capture surface while recording -->
+            <div class="relative flex items-center">
+              <input
+                type="text"
+                class="input-field font-mono font-medium pr-10"
                 placeholder="请录制按键或直接在此输入（例如: CTRL+ALT+W 或 ALT+SPACE）"
                 v-model="hotkeyModal.data.hotkey"
-                @focus="onHotkeyInputFocus"
               />
-              <button 
-                type="button" 
-                class="btn-icon absolute right-2 text-indigo-500" 
+              <button
+                type="button"
+                class="btn-icon absolute right-2 text-indigo-500"
                 :title="isRecordingHotkey ? '点击结束录制' : '点击开始键盘录制'"
                 @click="toggleHotkeyRecording"
               >
                 <Keyboard class="w-4 h-4" />
               </button>
-            </div>
-
-            <!-- Interactive Hotkey Recording Pad -->
-            <div 
-              class="key-record-box" 
-              :class="{ recording: isRecordingHotkey, active: isHotkeyBoxFocused }"
-              tabindex="0"
-              @focus="onHotkeyBoxFocus"
-              @blur="onHotkeyBoxBlur"
-              @keydown="onHotkeyRecordKeyDown"
-            >
-              <div v-if="hotkeyModal.data.hotkey" class="flex items-center gap-1.5 flex-wrap">
-                <template v-for="(k, idx) in hotkeyModal.data.hotkey.split('+')" :key="idx">
-                  <span v-if="idx > 0" class="text-xs text-muted font-bold">+</span>
-                  <span class="keycap">{{ k.trim() }}</span>
-                </template>
-                <span v-if="isRecordingHotkey" class="text-xs text-indigo-500 font-medium ml-2">
-                  (录制中：可随时再次按下以覆盖重录，完成后点击上方“结束录制”)
-                </span>
-              </div>
-              <div v-else-if="isRecordingHotkey" class="text-xs text-indigo-500 font-medium flex items-center gap-2">
-                <span class="recording-dot"></span>
-                <span>请在键盘上按下目标组合键（支持连续按下多次以覆盖）...</span>
-              </div>
-              <div v-else class="text-xs text-muted flex items-center gap-2">
-                <Radio class="w-3.5 h-3.5 text-indigo-400" />
-                <span>点击“点击录制按键”即可直接按下键盘，或在上方输入框直接打字输入</span>
-              </div>
             </div>
           </div>
 
@@ -1369,7 +1340,7 @@
               @change="e => onTargetTypeChange(e.target.value)"
             >
               <option value="win32">桌面客户端 (可执行程序)</option>
-              <option value="browser_tab">网页标签页 (按标题匹配)</option>
+              <option value="browser_tab">网页应用 (按标题匹配)</option>
             </select>
           </div>
 
@@ -1392,22 +1363,20 @@
           <!-- When target_type is browser_tab -->
           <template v-if="hotkeyModal.data.target_type === 'browser_tab'">
             <div class="form-item col-span-2">
-              <label class="form-label">标签页标题关键字 (必填)</label>
-              <input 
-                type="text" 
-                class="input-field" 
+              <label class="form-label">标题关键字 (必填)</label>
+              <input
+                type="text"
+                class="input-field"
                 placeholder="例如: 千问、Gemini、Bilibili、知乎"
                 v-model="hotkeyModal.data.title_keyword"
               />
-              <span class="field-hint">
-                浏览器会将活动标签页标题显示在窗口上。输入网页标题中的任意关键字，即可瞬间呼出对应窗口。
-              </span>
+              <span class="field-hint">用于在浏览器窗口标题中匹配该网页</span>
             </div>
 
             <div class="form-item col-span-2">
               <label class="form-label">所属浏览器进程</label>
               <select class="input-field" v-model="browserPresetSelection" @change="onBrowserPresetChange">
-                <option value="auto">自动匹配所有浏览器 (默认推荐，无需关心是 Edge 还是 Chrome)</option>
+                <option value="auto">自动匹配所有浏览器 (推荐)</option>
                 <option value="msedge.exe">Microsoft Edge (msedge.exe)</option>
                 <option value="chrome.exe">Google Chrome (chrome.exe)</option>
                 <option value="custom">其他自定义浏览器进程...</option>
@@ -1431,21 +1400,17 @@
                 <option value="app_window">独立 app 窗口 (无标签栏地址栏，近似原生应用)</option>
                 <option value="tab">浏览器标签页 (在已有浏览器窗口内新开标签)</option>
               </select>
-              <span class="field-hint">
-                标签找不到时自动重开所用的形态。独立 app 窗口以 --app 参数唤起浏览器，窗口标题仍为网页标题，快捷键切换照常生效。
-              </span>
+              <span class="field-hint">标签丢失时的重开形态</span>
             </div>
 
             <div v-if="hotkeyModal.data.tab_mode === 'app_window'" class="form-item col-span-2">
-              <label class="form-label">已安装应用检测 (实时)</label>
+              <label class="form-label">已安装应用检测</label>
               <div class="text-sm font-medium" :class="detectedWebApp ? 'text-emerald-600' : 'text-muted'">
                 {{ detectedWebApp
                   ? '✓ 检测到已安装应用「' + detectedWebApp.name + '」，唤起时将使用完整应用身份'
                   : '○ 未检测到该网址的已安装应用，届时以临时 app 窗口打开' }}
               </div>
-              <span class="field-hint">
-                检测读取本机浏览器的开始菜单注册，实时跟随上面的目标网址变化；结果不写入配置、不绑定本机，云同步到其他设备后各自检测。想要完整应用身份（应用菜单/固定任务栏等），可先在浏览器里把该站"安装为应用"。
-              </span>
+              <span class="field-hint">实时匹配本机已安装的网页应用；未安装则以临时窗口打开</span>
             </div>
 
             <div class="form-item col-span-2">
@@ -1453,18 +1418,16 @@
               <input
                 type="text"
                 class="input-field"
-                placeholder="例如: https://chat.qwen.ai ，留空则标签丢失时不自动打开"
+                placeholder="https://chat.qwen.ai"
                 v-model="hotkeyModal.data.tab_url"
               />
-              <span class="field-hint">
-                标签页被关闭后按快捷键时，将重新打开该网址：浏览器已运行则新建标签页，未运行则带着网址启动浏览器。
-              </span>
+              <span class="field-hint">标签丢失后按快捷键重开此网址</span>
             </div>
 
             <div class="form-item col-span-2 flex items-center justify-between pt-1">
               <div>
                 <span class="font-medium text-sm text-main">标签不存在时自动打开</span>
-                <p class="text-xs text-muted">找不到匹配的标签页时，自动重新打开上面的目标网址（需填写网址，留空无法保存）</p>
+                <p class="text-xs text-muted">需填写目标网址</p>
               </div>
               <label class="toggle-switch">
                 <input type="checkbox" v-model="hotkeyModal.data.launch_if_not_running" />
@@ -1487,19 +1450,23 @@
 
             <div class="form-item col-span-2">
               <label class="form-label">程序路径 (可选)</label>
-              <div class="flex gap-2">
-                <input 
-                  type="text" 
-                  class="input-field flex-1" 
+              <div class="relative flex items-center">
+                <input
+                  type="text"
+                  class="input-field pr-10"
                   placeholder="例如: D:\Program Files\App\app.exe (可留空自动识别)"
                   v-model="hotkeyModal.data.install_path"
                 />
-                <button type="button" class="btn btn-secondary whitespace-nowrap" @click="pickExecutableFile">
-                  <FolderOpen class="w-4 h-4 mr-1" />
-                  <span>浏览...</span>
+                <button
+                  type="button"
+                  class="btn-icon absolute right-2 text-indigo-500"
+                  title="浏览选择本地 .exe 文件"
+                  @click="pickExecutableFile"
+                >
+                  <FolderOpen class="w-4 h-4" />
                 </button>
               </div>
-              <span class="field-hint">点击“浏览”可通过 Windows 原生文件窗口选择本地 .exe 文件</span>
+              <span class="field-hint">留空时按进程名自动识别安装路径</span>
             </div>
 
             <div class="form-item col-span-2 flex items-center justify-between pt-1">
@@ -1578,38 +1545,6 @@
               </button>
             </div>
 
-            <!-- Trigger Recording Pad (Supports Mouse & Keyboard) -->
-            <div 
-              class="key-record-box" 
-              :class="{ recording: isRecordingTrigger, active: isTriggerBoxFocused }"
-              tabindex="0"
-              @focus="onTriggerBoxFocus"
-              @blur="onTriggerBoxBlur"
-              @keydown="onTriggerRecordKeyDown"
-              @pointerdown="onTriggerRecordPointerDown"
-              @contextmenu.prevent
-            >
-              <div v-if="remapModal.data.trigger && remapModal.data.trigger.length > 0" class="flex items-center gap-1.5 flex-wrap">
-                <template v-for="(k, idx) in remapModal.data.trigger" :key="idx">
-                  <span v-if="idx > 0" class="text-xs text-muted font-bold">+</span>
-                  <span class="keycap" :class="{ mouse: isMouseKey(k) }">
-                    {{ formatKeyLabel(k) }}
-                  </span>
-                </template>
-                <span v-if="isRecordingTrigger" class="text-xs text-indigo-500 font-medium ml-2">
-                  (录制中：可随时再次按下以覆盖重录，完成后点击上方“结束录制”)
-                </span>
-              </div>
-              <div v-else-if="isRecordingTrigger" class="text-xs text-indigo-500 font-medium flex items-center gap-2">
-                <span class="recording-dot"></span>
-                <span>请按下鼠标侧键 (X1/X2/滚轮) 或键盘组合键...</span>
-              </div>
-              <div v-else class="text-xs text-muted flex items-center gap-2">
-                <MousePointer class="w-3.5 h-3.5 text-indigo-400" />
-                <span>点击“点击录制触发键”直接按键，或在上方输入框直接打字输入代码</span>
-              </div>
-            </div>
-
             <div class="modal-chips-row">
               <span class="text-xs text-muted">快速插入：</span>
               <button type="button" class="preset-tag" @click="insertTriggerKey('x1')">+ X1 侧键后退</button>
@@ -1667,36 +1602,6 @@
               >
                 <Keyboard class="w-4 h-4" />
               </button>
-            </div>
-
-            <!-- Output Recording Pad (Keyboard) -->
-            <div 
-              class="key-record-box" 
-              :class="{ recording: isRecordingOutput, active: isOutputBoxFocused }"
-              tabindex="0"
-              @focus="onOutputBoxFocus"
-              @blur="onOutputBoxBlur"
-              @keydown="onOutputRecordKeyDown"
-            >
-              <div v-if="remapModal.data.output && remapModal.data.output.length > 0" class="flex items-center gap-1.5 flex-wrap">
-                <template v-for="(k, idx) in remapModal.data.output" :key="idx">
-                  <span v-if="idx > 0" class="text-xs text-muted font-bold">+</span>
-                  <span class="keycap">
-                    {{ formatKeyLabel(k) }}
-                  </span>
-                </template>
-                <span v-if="isRecordingOutput" class="text-xs text-indigo-500 font-medium ml-2">
-                  (录制中：可随时再次按下以覆盖重录，完成后点击上方“结束录制”)
-                </span>
-              </div>
-              <div v-else-if="isRecordingOutput" class="text-xs text-indigo-500 font-medium flex items-center gap-2">
-                <span class="recording-dot"></span>
-                <span>请在键盘上按下目标组合键（例如按住 Ctrl + W）...</span>
-              </div>
-              <div v-else class="text-xs text-muted flex items-center gap-2">
-                <Keyboard class="w-3.5 h-3.5 text-indigo-400" />
-                <span>点击“点击录制输出键”直接按下组合键，或在上方输入框直接打字输入</span>
-              </div>
             </div>
 
             <div class="modal-chips-row">
@@ -2006,7 +1911,6 @@ const hotkeyModal = ref({
 })
 
 const isRecordingHotkey = ref(false)
-const isHotkeyBoxFocused = ref(false)
 
 const toggleHotkeyRecording = async () => {
   isRecordingHotkey.value = !isRecordingHotkey.value
@@ -2014,29 +1918,6 @@ const toggleHotkeyRecording = async () => {
     await invoke('set_recording_state', { active: isRecordingHotkey.value })
   } catch (e) {
     console.error('set_recording_state error:', e)
-  }
-}
-
-const onHotkeyBoxFocus = async () => {
-  isHotkeyBoxFocused.value = true
-  if (!isRecordingHotkey.value) {
-    isRecordingHotkey.value = true
-    try {
-      await invoke('set_recording_state', { active: true })
-    } catch (e) {}
-  }
-}
-
-const onHotkeyBoxBlur = () => {
-  isHotkeyBoxFocused.value = false
-}
-
-const onHotkeyInputFocus = async () => {
-  if (isRecordingHotkey.value) {
-    isRecordingHotkey.value = false
-    try {
-      await invoke('set_recording_state', { active: false })
-    } catch (e) {}
   }
 }
 
@@ -2050,7 +1931,10 @@ const closeHotkeyModal = async () => {
   hotkeyModal.value.show = false
 }
 
+// Window-level capture-phase listener: active only while recording, so manual
+// typing and the ESC-close listener behave normally otherwise.
 const onHotkeyRecordKeyDown = (e) => {
+  if (!isRecordingHotkey.value) return
   e.preventDefault()
   e.stopPropagation()
 
@@ -2167,7 +2051,6 @@ const onTargetTypeChange = (val) => {
 
 const openAddHotkeyModal = () => {
   isRecordingHotkey.value = false
-  isHotkeyBoxFocused.value = false
   hotkeyModal.value = {
     show: true,
     isEdit: false,
@@ -2195,7 +2078,6 @@ const openAddHotkeyModal = () => {
 
 const editHotkey = (entry, index) => {
   isRecordingHotkey.value = false
-  isHotkeyBoxFocused.value = false
   const data = JSON.parse(JSON.stringify(entry))
   if (!data._runtime_profile) {
     data._runtime_profile = { hide_behavior: 'minimize' }
@@ -2290,9 +2172,9 @@ const applyHotkeyPreset = (preset) => {
       break
     case 'browser_tab':
       hotkeyModal.value.data.target_type = 'browser_tab'
-      hotkeyModal.value.data.name = hotkeyModal.value.data.name || '网页标签页'
       hotkeyModal.value.data.exe_name = ''
       hotkeyModal.value.data.title_keyword = hotkeyModal.value.data.title_keyword || '千问'
+      hotkeyModal.value.data.name = hotkeyModal.value.data.name || `${hotkeyModal.value.data.title_keyword}(网页应用)`
       hotkeyModal.value.data.install_path = ''
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
       updateBrowserPresetSelectionFromData()
@@ -2348,7 +2230,7 @@ const saveHotkeyModal = async () => {
 
   if (!hotkeyModal.value.data.name?.trim()) {
     if (hotkeyModal.value.data.target_type === 'browser_tab' && hotkeyModal.value.data.title_keyword) {
-      hotkeyModal.value.data.name = `网页: ${hotkeyModal.value.data.title_keyword}`
+      hotkeyModal.value.data.name = `${hotkeyModal.value.data.title_keyword}(网页应用)`
     } else if (hotkeyModal.value.data.exe_name) {
       hotkeyModal.value.data.name = hotkeyModal.value.data.exe_name.replace(/\.exe$/i, '')
     } else {
@@ -2534,9 +2416,7 @@ const remapModal = ref({
 })
 
 const isRecordingTrigger = ref(false)
-const isTriggerBoxFocused = ref(false)
 const isRecordingOutput = ref(false)
-const isOutputBoxFocused = ref(false)
 
 const closeRemapModal = async () => {
   if (isRecordingTrigger.value || isRecordingOutput.value) {
@@ -2557,42 +2437,12 @@ const toggleTriggerRecording = async () => {
   } catch (e) {}
 }
 
-const onTriggerBoxFocus = async () => {
-  isTriggerBoxFocused.value = true
-  if (!isRecordingTrigger.value) {
-    isRecordingTrigger.value = true
-    isRecordingOutput.value = false
-    try {
-      await invoke('set_recording_state', { active: true })
-    } catch (e) {}
-  }
-}
-
-const onTriggerBoxBlur = () => {
-  isTriggerBoxFocused.value = false
-}
-
 const toggleOutputRecording = async () => {
   isRecordingOutput.value = !isRecordingOutput.value
   isRecordingTrigger.value = false
   try {
     await invoke('set_recording_state', { active: isRecordingOutput.value })
   } catch (e) {}
-}
-
-const onOutputBoxFocus = async () => {
-  isOutputBoxFocused.value = true
-  if (!isRecordingOutput.value) {
-    isRecordingOutput.value = true
-    isRecordingTrigger.value = false
-    try {
-      await invoke('set_recording_state', { active: true })
-    } catch (e) {}
-  }
-}
-
-const onOutputBoxBlur = () => {
-  isOutputBoxFocused.value = false
 }
 
 const onRemapTriggerTextInput = (val) => {
@@ -2612,6 +2462,7 @@ const onRemapOutputTextInput = (val) => {
 }
 
 const onTriggerRecordKeyDown = (e) => {
+  if (!isRecordingTrigger.value) return
   e.preventDefault()
   e.stopPropagation()
 
@@ -2645,6 +2496,7 @@ const onTriggerRecordKeyDown = (e) => {
 }
 
 const onTriggerRecordPointerDown = (e) => {
+  if (!isRecordingTrigger.value) return
   if (e.button === 3 || e.button === 4 || e.button === 1) {
     e.preventDefault()
     e.stopPropagation()
@@ -2675,6 +2527,7 @@ const onTriggerRecordPointerDown = (e) => {
 }
 
 const onOutputRecordKeyDown = (e) => {
+  if (!isRecordingOutput.value) return
   e.preventDefault()
   e.stopPropagation()
 
@@ -2707,8 +2560,6 @@ const onOutputRecordKeyDown = (e) => {
 const openAddRemapModal = (initialData = null) => {
   isRecordingTrigger.value = false
   isRecordingOutput.value = false
-  isTriggerBoxFocused.value = false
-  isOutputBoxFocused.value = false
   remapModal.value = {
     show: true,
     isEdit: false,
@@ -2725,8 +2576,6 @@ const openAddRemapModal = (initialData = null) => {
 const openEditRemapModal = (km, idx) => {
   isRecordingTrigger.value = false
   isRecordingOutput.value = false
-  isTriggerBoxFocused.value = false
-  isOutputBoxFocused.value = false
   remapModal.value = {
     show: true,
     isEdit: true,
@@ -3051,8 +2900,14 @@ onMounted(async () => {
   try {
     appVersion.value = await invoke('get_app_version')
   } catch (e) {}
-  // Global ESC: close the topmost open modal. While a key recorder owns the focus,
-  // its keydown handler stops propagation, so ESC there is recorded instead of closing.
+  // Recording capture runs in the capture phase, ahead of this ESC-close listener,
+  // so ESC is recorded (not closing the modal) while a recorder is armed.
+  window.addEventListener('keydown', onHotkeyRecordKeyDown, true)
+  window.addEventListener('keydown', onTriggerRecordKeyDown, true)
+  window.addEventListener('keydown', onOutputRecordKeyDown, true)
+  window.addEventListener('pointerdown', onTriggerRecordPointerDown, true)
+
+  // Global ESC: close the topmost open modal when not recording.
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return
     if (hotkeyModal.value.show) {
@@ -4626,7 +4481,7 @@ onMounted(async () => {
   position: absolute;
   top: 18px;
   right: 28px;
-  z-index: 100;
+  z-index: 300;
   display: flex;
   align-items: center;
   gap: 12px;

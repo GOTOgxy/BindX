@@ -120,4 +120,4 @@ CARGO_TARGET_DIR=D:/bindx-target npx tauri build --no-bundle
 
 ## 文档
 
-各子系统的详细行为与实现逻辑见 [`docs/handbook.md`](docs/handbook.md)：快捷键目标类型（网页标签/桌面客户端/内置应用）、按键映射、配置读取与云同步、安装与更新、开发与打包编译。
+各子系统的详细行为与实现逻辑见 [`docs/handbook.md`](docs/handbook.md)：快捷键目标类型（网页应用/桌面客户端/内置应用）、按键映射、配置读取与云同步、安装与更新、开发与打包编译。
