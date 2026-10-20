@@ -91,3 +91,33 @@ npx tauri dev
 npx tauri build --no-bundle
 ```
 构建成功后的可执行文件将生成于 `target/release/bindx.exe`。
+
+### 分发体系（v2.1.0+）
+
+发布流程（推送 `v*` tag 触发 `.github/workflows/release.yml`）产出三种产物：
+
+| 产物 | 说明 |
+|------|------|
+| `bindx.exe` | 便携式程序本体，单文件，放哪都能直接运行 |
+| `bindx-windows-x64-portable.zip` | 便携压缩包，解压后**仅含** `bindx.exe` |
+| `bindx-setup.exe` | Inno Setup 安装程序（源码 `installer/bindx.iss`），用户级安装至 `%LOCALAPPDATA%\Programs\BindX`，无需管理员权限 |
+
+- **配置跟着用户走，不跟着程序走**：exe 旁存在 `data/` 目录即为便携模式（配置在 `data/` 内），否则为安装模式（配置在 `%APPDATA%\BindX\`），两种模式自动兼容。
+- **自更新按模式分支**：便携模式原地替换 exe；安装模式下载 `bindx-setup.exe` 静默覆盖安装（`/VERYSILENT`），安装完成后自动重启应用。全程不改动配置、安装路径与快捷方式。
+
+### 本地构建路径注意
+
+仓库路径含空格时（如 `D:\Program Files\...`），GNU 工具链的 `windres` 会因资源编译路径未转义而失败。两种解决办法：
+
+```bash
+# 办法一：把构建产物目录指向无空格路径
+CARGO_TARGET_DIR=D:/bindx-target npx tauri build --no-bundle
+```
+
+或在激活了 Visual Studio 构建环境（vcvars）的终端中使用 MSVC 工具链。CI 统一使用 MSVC，不受此影响。
+
+---
+
+## 文档
+
+各子系统的详细行为与实现逻辑见 [`docs/handbook.md`](docs/handbook.md)：快捷键目标类型（网页标签/桌面客户端/内置应用）、按键映射、配置读取与云同步、安装与更新、开发与打包编译。
