@@ -301,26 +301,26 @@ fn handle_hotkey_trigger(
 
     if entry.target_type.as_deref() == Some("browser_tab") {
         // For a browser tab, "launching" means reopening the target URL: ShellExecute
-        // hands the URL to the running browser (new tab in the existing window) or starts
-        // the browser with that URL. Never spawn a bare browser window. Without a
-        // configured URL there is nothing to reopen, so stay quiet.
-        if let Some(url) = entry.tab_url.as_deref().filter(|u| !u.trim().is_empty()) {
-            let app_window = entry.tab_mode.as_deref() == Some("app_window");
-            // Prefer the installed web app (full browser identity: app menu, pins).
-            // Detection is per-machine at trigger time; nothing machine-specific is
-            // stored in the config, so synced entries work everywhere.
-            if app_window {
-                let hints: Vec<String> = [entry.title_keyword.clone(), entry.name.clone()]
-                    .into_iter()
-                    .flatten()
-                    .collect();
-                if let Some(a) = find_installed_web_app_for_url(url, &hints) {
-                    if launch_installed_web_app(&a.browser_exe, &a.profile, &a.id).is_ok() {
-                        return;
-                    }
+        // Never spawn a bare browser window: reopen goes through the installed
+        // app, an app-mode window, or the default handler — in that order.
+        let app_window = entry.tab_mode.as_deref() == Some("app_window");
+        let url = entry.tab_url.as_deref().filter(|u| !u.trim().is_empty());
+        let hints: Vec<String> = [entry.title_keyword.clone(), entry.name.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
+        // Installed web app first (full browser identity: app menu, pins), matched
+        // by URL when configured, otherwise by name affinity. Detection is
+        // per-machine at trigger time; nothing machine-specific is stored.
+        if app_window {
+            if let Some(a) = find_installed_web_app_for_url(url.unwrap_or(""), &hints) {
+                if launch_installed_web_app(&a.browser_exe, &a.profile, &a.id).is_ok() {
+                    return;
                 }
             }
-            let _ = open_url_in_browser(url, exe_name, app_window);
+        }
+        if let Some(u) = url {
+            let _ = open_url_in_browser(u, exe_name, app_window);
         }
         return;
     }

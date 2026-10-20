@@ -121,15 +121,17 @@
 
       <!-- Content Area -->
       <main class="content-panel">
-        <!-- Alert Toast -->
-        <transition name="fade">
-          <div v-if="toast.show" class="toast-banner" :class="toast.type">
-            <div class="toast-content">
-              <span>{{ toast.message }}</span>
+        <!-- Alert Toast: teleported to body so it stacks above modal backdrops -->
+        <Teleport to="body">
+          <transition name="fade">
+            <div v-if="toast.show" class="toast-banner" :class="toast.type">
+              <div class="toast-content">
+                <span>{{ toast.message }}</span>
+              </div>
+              <button class="toast-close" @click="toast.show = false">×</button>
             </div>
-            <button class="toast-close" @click="toast.show = false">×</button>
-          </div>
-        </transition>
+          </transition>
+        </Teleport>
 
         <!-- 1. 概览 (Overview) -->
         <div v-if="currentTab === 'overview'" class="tab-pane">
@@ -899,7 +901,7 @@
                   <div v-else class="update-idle-block">
                     <div class="flex flex-col gap-2.5">
                       <div class="flex gap-3">
-                        <button class="btn btn-success flex-1" @click="onStartAutoUpdate">
+                        <button class="btn btn-success" @click="onStartAutoUpdate">
                           <DownloadCloud class="w-4 h-4" />
                           {{ installMode === 'installed' ? '一键静默更新' : '一键自动更新' }}
                         </button>
@@ -1270,7 +1272,7 @@
                 class="preset-chip" 
                 @click="applyHotkeyPreset('browser_tab')"
               >
-                网页应用
+                千问(网页应用)
               </button>
             </div>
           </div>
@@ -1304,22 +1306,12 @@
             </div>
 
             <!-- Manual input doubles as the capture surface while recording -->
-            <div class="relative flex items-center">
-              <input
-                type="text"
-                class="input-field font-mono font-medium pr-10"
-                placeholder="请录制按键或直接在此输入（例如: CTRL+ALT+W 或 ALT+SPACE）"
-                v-model="hotkeyModal.data.hotkey"
-              />
-              <button
-                type="button"
-                class="btn-icon absolute right-2 text-indigo-500"
-                :title="isRecordingHotkey ? '点击结束录制' : '点击开始键盘录制'"
-                @click="toggleHotkeyRecording"
-              >
-                <Keyboard class="w-4 h-4" />
-              </button>
-            </div>
+            <input
+              type="text"
+              class="input-field font-mono font-medium"
+              placeholder="请录制按键或直接在此输入（例如: CTRL+ALT+W 或 ALT+SPACE）"
+              v-model="hotkeyModal.data.hotkey"
+            />
           </div>
 
           <div class="form-item">
@@ -1427,7 +1419,7 @@
             <div class="form-item col-span-2 flex items-center justify-between pt-1">
               <div>
                 <span class="font-medium text-sm text-main">标签不存在时自动打开</span>
-                <p class="text-xs text-muted">需填写目标网址</p>
+                <p class="text-xs text-muted">未填网址时仅能按名称唤起已安装的网页应用</p>
               </div>
               <label class="toggle-switch">
                 <input type="checkbox" v-model="hotkeyModal.data.launch_if_not_running" />
@@ -1459,7 +1451,8 @@
                 />
                 <button
                   type="button"
-                  class="btn-icon absolute right-2 text-indigo-500"
+                  class="btn-icon text-indigo-500"
+                  style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%)"
                   title="浏览选择本地 .exe 文件"
                   @click="pickExecutableFile"
                 >
@@ -1527,23 +1520,13 @@
             </div>
 
             <!-- Manual Editable Input Field for Trigger -->
-            <div class="relative flex items-center mb-2">
-              <input 
-                type="text" 
-                class="input-field font-mono text-sm pr-10" 
-                placeholder="例如: x1 或 ctrl+x1 (支持手动输入/修改代码，用 + 分隔)"
-                :value="remapModal.data.trigger ? remapModal.data.trigger.join('+') : ''"
-                @input="e => onRemapTriggerTextInput(e.target.value)"
-              />
-              <button 
-                type="button" 
-                class="btn-icon absolute right-2 text-indigo-500" 
-                :title="isRecordingTrigger ? '点击结束录制' : '点击开始捕获按键'"
-                @click="toggleTriggerRecording"
-              >
-                <MousePointer class="w-4 h-4" />
-              </button>
-            </div>
+            <input
+              type="text"
+              class="input-field font-mono text-sm"
+              placeholder="例如: x1 或 ctrl+x1 (支持手动输入/修改代码，用 + 分隔)"
+              :value="remapModal.data.trigger ? remapModal.data.trigger.join('+') : ''"
+              @input="e => onRemapTriggerTextInput(e.target.value)"
+            />
 
             <div class="modal-chips-row">
               <span class="text-xs text-muted">快速插入：</span>
@@ -1586,23 +1569,13 @@
             </div>
 
             <!-- Manual Editable Input Field for Output -->
-            <div class="relative flex items-center mb-2">
-              <input 
-                type="text" 
-                class="input-field font-mono text-sm pr-10" 
-                placeholder="例如: ctrl+w 或 win+d (支持手动输入/修改代码，用 + 分隔)"
-                :value="remapModal.data.output ? remapModal.data.output.join('+') : ''"
-                @input="e => onRemapOutputTextInput(e.target.value)"
-              />
-              <button 
-                type="button" 
-                class="btn-icon absolute right-2 text-indigo-500" 
-                :title="isRecordingOutput ? '点击结束录制' : '点击开始键盘录制'"
-                @click="toggleOutputRecording"
-              >
-                <Keyboard class="w-4 h-4" />
-              </button>
-            </div>
+            <input
+              type="text"
+              class="input-field font-mono text-sm"
+              placeholder="例如: ctrl+w 或 win+d (支持手动输入/修改代码，用 + 分隔)"
+              :value="remapModal.data.output ? remapModal.data.output.join('+') : ''"
+              @input="e => onRemapOutputTextInput(e.target.value)"
+            />
 
             <div class="modal-chips-row">
               <span class="text-xs text-muted">常用预设：</span>
@@ -1986,7 +1959,7 @@ const redetectInstalledWebApp = () => {
   clearTimeout(detectTimer)
   detectTimer = setTimeout(async () => {
     const d = hotkeyModal.value.data
-    if (!hotkeyModal.value.show || d.target_type !== 'browser_tab' || d.tab_mode !== 'app_window' || !(d.tab_url || '').trim()) {
+    if (!hotkeyModal.value.show || d.target_type !== 'browser_tab' || d.tab_mode !== 'app_window') {
       detectedWebApp.value = null
       return
     }
@@ -2174,7 +2147,7 @@ const applyHotkeyPreset = (preset) => {
       hotkeyModal.value.data.target_type = 'browser_tab'
       hotkeyModal.value.data.exe_name = ''
       hotkeyModal.value.data.title_keyword = hotkeyModal.value.data.title_keyword || '千问'
-      hotkeyModal.value.data.name = hotkeyModal.value.data.name || `${hotkeyModal.value.data.title_keyword}(网页应用)`
+      hotkeyModal.value.data.name = hotkeyModal.value.data.name || hotkeyModal.value.data.title_keyword
       hotkeyModal.value.data.install_path = ''
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
       updateBrowserPresetSelectionFromData()
@@ -2230,7 +2203,7 @@ const saveHotkeyModal = async () => {
 
   if (!hotkeyModal.value.data.name?.trim()) {
     if (hotkeyModal.value.data.target_type === 'browser_tab' && hotkeyModal.value.data.title_keyword) {
-      hotkeyModal.value.data.name = `${hotkeyModal.value.data.title_keyword}(网页应用)`
+      hotkeyModal.value.data.name = hotkeyModal.value.data.title_keyword
     } else if (hotkeyModal.value.data.exe_name) {
       hotkeyModal.value.data.name = hotkeyModal.value.data.exe_name.replace(/\.exe$/i, '')
     } else {
@@ -2246,10 +2219,6 @@ const saveHotkeyModal = async () => {
     }
     hotkeyModal.value.data.install_path = ''
     hotkeyModal.value.data.tab_url = (hotkeyModal.value.data.tab_url || '').trim()
-    if (hotkeyModal.value.data.launch_if_not_running && !hotkeyModal.value.data.tab_url) {
-      showToast('开启"标签不存在时自动打开"必须填写目标网址，否则标签关闭后无法知道该重新打开哪个网页', 'danger', 6000)
-      return
-    }
   }
   if (hotkeyModal.value.isEdit) {
     config.value.hotkeys.entries[hotkeyModal.value.index] = hotkeyModal.value.data
@@ -4478,7 +4447,7 @@ onMounted(async () => {
 
 /* Toast */
 .toast-banner {
-  position: absolute;
+  position: fixed;
   top: 18px;
   right: 28px;
   z-index: 300;

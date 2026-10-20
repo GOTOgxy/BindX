@@ -1,6 +1,6 @@
 {
   "name": "bindx",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "BindX 是一个 Windows 桌面工具，用**一个主程序、一个托盘图标、一个配置文件**统一管理两类能力：",
   "main": "index.js",
   "directories": {
