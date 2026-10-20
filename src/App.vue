@@ -899,8 +899,8 @@
 
                   <!-- Idle State: Initial prompt with Auto Update & Browser link -->
                   <div v-else class="update-idle-block">
-                    <div class="flex flex-col gap-2.5">
-                      <div class="flex gap-3">
+                    <div class="update-idle-inner">
+                      <div class="update-btn-row">
                         <button class="btn btn-success" @click="onStartAutoUpdate">
                           <DownloadCloud class="w-4 h-4" />
                           {{ installMode === 'installed' ? '一键静默更新' : '一键自动更新' }}
@@ -4631,6 +4631,22 @@ onMounted(async () => {
 /* Progress Bar & Alert Styles for Update */
 .update-action-container {
   width: 100%;
+}
+/* The project ships no tailwind-style utilities; lay this row out explicitly
+   and keep both buttons at the same compact size. */
+.update-idle-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.update-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.update-btn-row .btn {
+  padding: 8px 14px;
+  font-size: 13px;
 }
 .progress-bar-track {
   width: 100%;

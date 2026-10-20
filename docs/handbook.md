@@ -79,6 +79,25 @@
 - 校验警告（如开关开启但未填网址）以 toast 提示，层级高于模态框，填写页内直接可见。
 - 版本号各处（标题栏/概览/更新页）统一读取后端 `CARGO_PKG_VERSION`，不再硬编码。
 
+### 1.5 热键引擎内部与生命周期（`engine/hotkey.rs`）
+
+- `start` 起独立线程：对每条 `enabled` 条目 `RegisterHotKey(HWND::default(), id, mods | MOD_NOREPEAT, vk)`（线程级热键，`MOD_NOREPEAT` 抑制按住重复触发）；线程内 `GetMessageW` 消息泵，收到 `WM_HOTKEY` 按 id 找到条目 → `handle_hotkey_trigger`（即 1.2 流程）。
+- **热重载**：`reload` 存新规则后 `PostThreadMessageW` 投递 `WM_HOTKEY_RELOAD`（`WM_USER+101`）；引擎线程收到后整体反注册再注册，**不重建线程、不丢消息泵**。
+- **暂停/恢复**：`pause`/`resume` 投递 `WM_HOTKEY_PAUSE`/`WM_HOTKEY_RESUME`。录制开始时 `set_recording_state(true)` 同时暂停热键引擎与 remap 钩子，保证录制捕获原始按键；录制结束恢复。
+- **停止**：投递 `WM_QUIT` 退出消息循环并反注册。
+- **自呼出**：目标是 BindX 自身的条目不走窗口查找，直接调 `toggle_window_sender` 回调（lib.rs 注册：主窗口可见则隐藏，否则 show + unminimize + focus）。
+
+### 1.6 局部流程：新增/修改快捷键端到端
+
+```
+模态框（录制/手输热键、目标类型、字段）
+ → 保存校验（热键非空；browser_tab 必填标题关键字）
+ → 写入 config.hotkeys.entries
+ → update_config 命令：save_config 落盘 → set_autostart 同步注册表
+                       → hotkey_engine.reload / remap_engine 重载
+ → 引擎线程 WM_HOTKEY_RELOAD 反注册+注册 → 全局立即生效
+```
+
 ---
 
 ## 二、按键映射
@@ -106,6 +125,15 @@
 - **录制隔离**：UI 进入录制时 `set_recording_paused(true)` 暂停钩子拦截，保证录制能捕获原始按键（含 ESC）。
 - **录制交互**：按下录制按钮后，捕获由**窗口级 capture 阶段监听**完成——窗口内任意位置按键即录（触发键另含鼠标侧键，走窗口级 `pointerdown` 捕获），无需先点击特定区域；未录制时输入框正常手动输入。编辑区为两行布局（标签+按钮行、输入框行）。
 - 配置项 `app.output_delay_ms`、`app.restore_held_modifiers` 目前在 UI 暴露但后端尚未消费（保留项）。
+
+### 2.3 局部流程：新增映射端到端
+
+```
+点"录制" → 窗口级 capture 监听（keydown / pointerdown，X1/X2 按 button 映射）
+ → trigger / output 数组 → 保存 → update_config → remap_engine.start/reload
+ → 钩子线程读取新规则 → 全局立即生效
+输出执行：命中 → 独立线程 send_key_sequence（顺序按下、逆序抬起、自标记防环）
+```
 
 ---
 
@@ -136,6 +164,21 @@
 ### 3.4 机器本地数据（非配置）
 
 `%LOCALAPPDATA%\BindX\webapps_cache.json`（已安装网页应用学习缓存）等机器本地状态**不进入配置文件、不参与云同步**，换机自动重建。
+
+### 3.5 启动与常驻流程（`lib.rs::run`）
+
+```
+panic hook（bindx_error.log；过滤 0x800700AA 资源占用噪声）
+ → load_config（含 legacy 迁移）→ AppState（双引擎 Arc）
+ → setup：
+    清理上轮更新残留（bindx.exe.old、bindx_update.tmp）
+    → 按 hotkey_running / mouse_running 启动双引擎
+    → 托盘菜单（显示主窗口 / 检查更新... / 退出 BindX）
+    → 注册热键引擎自呼出回调
+    → 显示主窗口；关闭按钮 prevent_close + hide（隐藏到托盘，不退出）
+```
+
+`webdav.auto_sync_on_startup` 目前在 UI 暴露但启动流程尚未消费（保留项）。
 
 ---
 
@@ -176,6 +219,16 @@
 ### 4.5 发布流水线
 
 推送 `v*` tag → `release.yml`：MSVC 构建 → 打包 exe-only zip → `iscc` 编译 `.iss`（版本号取自 `tauri.conf.json`）→ 发布三产物。
+
+### 4.6 局部流程：更新端到端
+
+```
+检查(check_software_update) → GitHub latest → semver 比较 → 资产选择
+UI 状态机：idle → downloading（update-progress 事件：percent/message）
+         → applying → done（便携：等待"立即重启"）/ error（重试或手动下载）
+便携：下载 exe → 现 exe 改名 .old → 替换（失败回滚）→ 用户点重启 → 下次启动清理 .old
+安装：下载 setup 到临时目录 → 分离静默启动 → 应用 exit 交棒 → 安装程序自动重启应用
+```
 
 ---
 
