@@ -12,4 +12,4 @@ node_modules/
 src-tauri/target/
 target/
 *.exe
-
+.cargo/

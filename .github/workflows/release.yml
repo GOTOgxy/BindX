@@ -24,21 +24,50 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Setup Rust
+      - name: Setup Rust (MSVC)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
       - name: Build Tauri Application
         run: npx tauri build --no-bundle
 
-      - name: Locate Artifact
+      - name: Locate and Package Artifacts
         shell: pwsh
         run: |
-          Copy-Item "src-tauri\target\release\bindx.exe" -Destination "bindx.exe" -Force
+          # 1. Locate bindx.exe wherever it was generated
+          $exe = Get-ChildItem -Path . -Recurse -Filter "bindx.exe" | Where-Object { $_.FullName -like "*release*bindx.exe" } | Select-Object -First 1
+          if (-not $exe) {
+              $exe = Get-ChildItem -Path "C:\Users" -Recurse -Filter "bindx.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*release*bindx.exe" } | Select-Object -First 1
+          }
+          if (-not $exe) {
+              throw "Could not locate release bindx.exe"
+          }
+          Write-Host "Found bindx.exe at: $($exe.FullName)"
+          Copy-Item $exe.FullName -Destination "bindx.exe" -Force
+
+          # 2. Package portable zip with both bindx.exe and WebView2Loader.dll if present
+          New-Item -ItemType Directory -Path "bindx-portable" -Force
+          Copy-Item "bindx.exe" -Destination "bindx-portable\bindx.exe" -Force
+
+          $dll = Get-ChildItem -Path $exe.DirectoryName -Filter "WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) {
+              $dll = Get-ChildItem -Path . -Recurse -Filter "WebView2Loader.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if ($dll) {
+              Write-Host "Found WebView2Loader.dll at: $($dll.FullName)"
+              Copy-Item $dll.FullName -Destination "bindx-portable\WebView2Loader.dll" -Force
+          }
+
+          Compress-Archive -Path "bindx-portable\*" -DestinationPath "bindx-windows-x64-portable.zip" -Force
+          Write-Host "Created bindx-windows-x64-portable.zip"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: bindx.exe
+          files: |
+            bindx.exe
+            bindx-windows-x64-portable.zip
           tag_name: ${{ github.ref_name }}
           name: BindX ${{ github.ref_name }}
           draft: false
