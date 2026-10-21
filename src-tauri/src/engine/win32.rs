@@ -677,6 +677,47 @@ fn process_command_line(pid: u32) -> Option<String> {
     }
 }
 
+/// Title of the first visible window owned by `pid`, filtered against
+/// transient/browser-generic titles ("New tab", "Loading", Edge itself).
+fn main_window_title_for_pid(pid: u32) -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+    };
+    struct Ctx {
+        pid: u32,
+        title: Option<String>,
+    }
+    unsafe extern "system" fn proc(hwnd: HWND, lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
+        let ctx = &mut *(lparam.0 as *mut Ctx);
+        let mut win_pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut win_pid));
+        if win_pid == ctx.pid && IsWindowVisible(hwnd).as_bool() {
+            let len = GetWindowTextLengthW(hwnd);
+            if len > 0 {
+                let mut buf = vec![0u16; len as usize + 1];
+                let got = GetWindowTextW(hwnd, &mut buf);
+                if got > 0 {
+                    let t = String::from_utf16_lossy(&buf[..got as usize]);
+                    let low = t.to_lowercase();
+                    let generic = ["new tab", "loading", "microsoft edge", "edge‎"]
+                        .iter()
+                        .any(|g| low.contains(g));
+                    if !generic && low != "edge" {
+                        ctx.title = Some(t);
+                        return windows::Win32::Foundation::BOOL(0); // stop enumerating
+                    }
+                }
+            }
+        }
+        windows::Win32::Foundation::BOOL(1)
+    }
+    let mut ctx = Ctx { pid, title: None };
+    unsafe {
+        let _ = EnumWindows(Some(proc), LPARAM(&mut ctx as *mut Ctx as isize));
+    }
+    ctx.title
+}
+
 fn cmd_arg(cmd: &str, key: &str) -> Option<String> {
     let i = cmd.find(key)?;
     let mut rest = &cmd[i + key.len()..];
@@ -719,17 +760,21 @@ pub fn harvest_running_web_apps() -> Vec<InstalledWebApp> {
                 };
                 if !browser.is_empty() {
                     if let Some(cmd) = process_command_line(entry.th32ProcessID) {
-                        if let (Some(id), Some(url)) =
-                            (cmd_arg(&cmd, "--app-id="), cmd_arg(&cmd, "--app-url="))
-                        {
+                        // --app-id alone is enough: running app-mode processes often
+                        // carry no --app-url (only shortcut launch params do).
+                        if let Some(id) = cmd_arg(&cmd, "--app-id=") {
                             let profile = cmd_arg(&cmd, "--profile-directory=")
                                 .unwrap_or_else(|| "Default".to_string());
+                            // The app window's title is the most reliable display
+                            // name: Edge persists names to disk only lazily.
+                            let name = main_window_title_for_pid(entry.th32ProcessID)
+                                .unwrap_or_default();
                             out.push(InstalledWebApp {
                                 id,
-                                name: String::new(),
+                                name,
                                 profile,
                                 browser_exe: browser.to_string(),
-                                app_url: url,
+                                app_url: cmd_arg(&cmd, "--app-url=").unwrap_or_default(),
                             });
                         }
                     }
@@ -779,6 +824,10 @@ pub fn refresh_installed_web_apps() -> Vec<InstalledWebApp> {
             Some(slot) => {
                 if slot.app_url.is_empty() && !h.app_url.is_empty() {
                     slot.app_url = h.app_url;
+                    changed = true;
+                }
+                if slot.name.is_empty() && !h.name.is_empty() {
+                    slot.name = h.name;
                     changed = true;
                 }
             }
