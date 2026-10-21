@@ -1400,7 +1400,7 @@
               <div class="text-sm font-medium" :class="detectedWebApp ? 'text-emerald-600' : 'text-muted'">
                 {{ detectedWebApp
                   ? '✓ 检测到已安装应用「' + detectedWebApp.name + '」，唤起时将使用完整应用身份'
-                  : '○ 未检测到该网址的已安装应用，届时以临时 app 窗口打开' }}
+                  : '○ 未检测到该网址的已安装应用，届时以临时 app 窗口打开；若已在浏览器安装，打开其应用窗口一次即可被记住' }}
               </div>
               <span class="field-hint">实时匹配本机已安装的网页应用；未安装则以临时窗口打开</span>
             </div>
