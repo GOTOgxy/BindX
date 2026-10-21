@@ -14,22 +14,9 @@ use windows::Win32::System::Registry::{
 };
 use windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
-    PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-// ntdll is not exposed by the windows crate without Wdk features; declare the
-// one call we need. ProcessCommandLineInformation = 60.
-#[link(name = "ntdll")]
-extern "system" {
-    fn NtQueryInformationProcess(
-        process: isize,
-        infoclass: u32,
-        info: *mut std::ffi::c_void,
-        infolen: u32,
-        retlen: *mut u32,
-    ) -> i32;
-}
-const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
     VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F1, VK_F10, VK_F11,
@@ -487,6 +474,10 @@ pub struct InstalledWebApp {
     /// The `--app-url` recorded in a shortcut, when one exists; used as the
     /// strongest matching signal between a BindX entry and an installed app.
     pub app_url: String,
+    /// OS-level AppUserModelID (e.g. "chatgpt.com-…!App"): the launch key for
+    /// installed web apps via `explorer shell:AppsFolder\<aumid>`.
+    #[serde(default)]
+    pub aumid: String,
 }
 
 fn utf16_needle(s: &str) -> Vec<u16> {
@@ -630,6 +621,7 @@ pub fn list_installed_web_apps() -> Vec<InstalledWebApp> {
                     id,
                     profile: profile.clone(),
                     browser_exe: browser_exe.to_string(),
+                    aumid: String::new(),
                 });
             }
         }
@@ -637,85 +629,61 @@ pub fn list_installed_web_apps() -> Vec<InstalledWebApp> {
     out
 }
 
-/// Read a running process' command line (OS-level public contract).
-fn process_command_line(pid: u32) -> Option<String> {
+/// AppUserModelID of a window — the OS-level identity of installed web apps
+/// (e.g. "chatgpt.com-DFCB3CE4_…!App"). This is also what backs the Start Menu
+/// tiles that have no .lnk behind them.
+fn window_aumid(hwnd: HWND) -> Option<String> {
+    use windows::Win32::UI::Shell::PropertiesSystem::{
+        SHGetPropertyStoreForWindow, IPropertyStore, PROPERTYKEY,
+    };
     unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, false, pid).ok()?;
-        let raw = h.0 as isize;
-        let mut needed = 0u32;
-        let _ = NtQueryInformationProcess(
-            raw,
-            PROCESS_COMMAND_LINE_INFORMATION,
-            std::ptr::null_mut(),
-            0,
-            &mut needed,
-        );
-        if needed < 16 {
-            let _ = CloseHandle(h);
+        let store: IPropertyStore = SHGetPropertyStoreForWindow(hwnd).ok()?;
+        let key = PROPERTYKEY {
+            fmtid: windows::core::GUID::from_u128(0x9F4C2855_9F79_4B39_A8D0_E1D42DE1D5F3),
+            pid: 5,
+        };
+        let v = store.GetValue(&key as *const PROPERTYKEY).ok()?;
+        let r = v.as_raw();
+        let vt = r.Anonymous.Anonymous.vt;
+        if vt != 8 && vt != 31 {
             return None;
         }
-        let mut buf = vec![0u8; needed as usize];
-        let st = NtQueryInformationProcess(
-            raw,
-            PROCESS_COMMAND_LINE_INFORMATION,
-            buf.as_mut_ptr() as *mut _,
-            needed,
-            &mut needed,
-        );
-        let _ = CloseHandle(h);
-        if st < 0 {
+        let p = r.Anonymous.Anonymous.Anonymous.bstrVal as *const u16;
+        if p.is_null() {
             return None;
         }
-        let len = u16::from_le_bytes([buf[0], buf[1]]) as usize;
-        let start = 16usize.min(buf.len());
-        let avail = buf.len().saturating_sub(start);
-        let wide: Vec<u16> = buf[start..start + len.min(avail)]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        Some(String::from_utf16_lossy(&wide))
+        let mut n = 0usize;
+        while *p.add(n) != 0 {
+            n += 1;
+        }
+        if n == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)))
     }
 }
 
-/// Title of the first visible window owned by `pid`, filtered against
-/// transient/browser-generic titles ("New tab", "Loading", Edge itself).
-fn main_window_title_for_pid(pid: u32) -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
-    };
-    struct Ctx {
-        pid: u32,
-        title: Option<String>,
-    }
-    unsafe extern "system" fn proc(hwnd: HWND, lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
-        let ctx = &mut *(lparam.0 as *mut Ctx);
-        let mut win_pid = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut win_pid));
-        if win_pid == ctx.pid && IsWindowVisible(hwnd).as_bool() {
-            let len = GetWindowTextLengthW(hwnd);
-            if len > 0 {
-                let mut buf = vec![0u16; len as usize + 1];
-                let got = GetWindowTextW(hwnd, &mut buf);
-                if got > 0 {
-                    let t = String::from_utf16_lossy(&buf[..got as usize]);
-                    let low = t.to_lowercase();
-                    let generic = ["new tab", "loading", "microsoft edge", "edge‎"]
-                        .iter()
-                        .any(|g| low.contains(g));
-                    if !generic && low != "edge" {
-                        ctx.title = Some(t);
-                        return windows::Win32::Foundation::BOOL(0); // stop enumerating
-                    }
-                }
-            }
-        }
-        windows::Win32::Foundation::BOOL(1)
-    }
-    let mut ctx = Ctx { pid, title: None };
+fn process_name_for_pid(pid: u32) -> Option<String> {
     unsafe {
-        let _ = EnumWindows(Some(proc), LPARAM(&mut ctx as *mut Ctx as isize));
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; MAX_PATH as usize];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            h,
+            PROCESS_NAME_FORMAT(0),
+            windows::core::PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
+        .is_ok();
+        let _ = CloseHandle(h);
+        if !ok {
+            return None;
+        }
+        let path = OsString::from_wide(&buf[..len as usize])
+            .to_string_lossy()
+            .to_lowercase();
+        path.rsplit(['\\', '/']).next().map(|s| s.to_string())
     }
-    ctx.title
 }
 
 fn cmd_arg(cmd: &str, key: &str) -> Option<String> {
@@ -736,55 +704,57 @@ fn cmd_arg(cmd: &str, key: &str) -> Option<String> {
     }
 }
 
-/// Harvest id/url/profile triples from the command lines of currently running
-/// browser app-mode processes. This is the only complete, version-stable source:
-/// every installed web app window carries its full launch contract on the CLI.
+/// Harvest installed web apps from **open app windows**: each carries an
+/// AppUserModelID (the OS launch key) plus its window title (display name).
+///
+/// Why windows and not process command lines: Chromium uses a handoff model —
+/// launching an app while the browser runs delegates the window to the existing
+/// browser process, whose command line never shows --app-id. The window's AUMID
+/// is the only contract that survives the handoff.
 pub fn harvest_running_web_apps() -> Vec<InstalledWebApp> {
-    let mut out = Vec::new();
-    unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            return out;
-        };
-        let mut entry = PROCESSENTRY32W::default();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        if Process32FirstW(snap, &mut entry).is_ok() {
-            loop {
-                let name_end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-                let name = String::from_utf16_lossy(&entry.szExeFile[..name_end]).to_lowercase();
-                let browser = if name == "msedge.exe" {
-                    "msedge.exe"
-                } else if name == "chrome.exe" {
-                    "chrome.exe"
-                } else {
-                    ""
-                };
-                if !browser.is_empty() {
-                    if let Some(cmd) = process_command_line(entry.th32ProcessID) {
-                        // --app-id alone is enough: running app-mode processes often
-                        // carry no --app-url (only shortcut launch params do).
-                        if let Some(id) = cmd_arg(&cmd, "--app-id=") {
-                            let profile = cmd_arg(&cmd, "--profile-directory=")
-                                .unwrap_or_else(|| "Default".to_string());
-                            // The app window's title is the most reliable display
-                            // name: Edge persists names to disk only lazily.
-                            let name = main_window_title_for_pid(entry.th32ProcessID)
-                                .unwrap_or_default();
+    let mut out: Vec<InstalledWebApp> = Vec::new();
+
+    unsafe extern "system" fn proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let out = &mut *(lparam.0 as *mut Vec<InstalledWebApp>);
+        if IsWindowVisible(hwnd).as_bool() {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            let browser = match process_name_for_pid(pid).as_deref() {
+                Some("msedge.exe") => "msedge.exe",
+                Some("chrome.exe") => "chrome.exe",
+                _ => "",
+            };
+            if !browser.is_empty() {
+                if let Some(aumid) = window_aumid(hwnd) {
+                    if aumid.ends_with("!App") && !out.iter().any(|a| a.aumid == aumid) {
+                        let len = GetWindowTextLengthW(hwnd);
+                        let mut name = String::new();
+                        if len > 0 {
+                            let mut buf = vec![0u16; len as usize + 1];
+                            let got = GetWindowTextW(hwnd, &mut buf);
+                            if got > 0 {
+                                name = String::from_utf16_lossy(&buf[..got as usize]);
+                            }
+                        }
+                        if !name.is_empty() {
                             out.push(InstalledWebApp {
-                                id,
+                                id: aumid.clone(),
                                 name,
-                                profile,
+                                profile: String::new(),
                                 browser_exe: browser.to_string(),
-                                app_url: cmd_arg(&cmd, "--app-url=").unwrap_or_default(),
+                                app_url: String::new(),
+                                aumid,
                             });
                         }
                     }
                 }
-                if Process32NextW(snap, &mut entry).is_err() {
-                    break;
-                }
             }
         }
-        let _ = CloseHandle(snap);
+        BOOL(1)
+    }
+
+    unsafe {
+        let _ = EnumWindows(Some(proc), LPARAM(&mut out as *mut Vec<InstalledWebApp> as isize));
     }
     out
 }
@@ -913,17 +883,23 @@ pub fn find_installed_web_app_for_url(url: &str, hints: &[String]) -> Option<Ins
     }).cloned()
 }
 
-/// Launch an installed web app with its full browser identity (app menu, pins, etc).
-pub fn launch_installed_web_app(
-    browser_exe: &str,
-    profile: &str,
-    app_id: &str,
-) -> Result<(), String> {
-    let path = resolve_app_executable_path(browser_exe)
-        .ok_or_else(|| format!("未找到浏览器: {}", browser_exe))?;
+/// Launch an installed web app with its full browser identity (app menu, pins,
+/// Start Menu presence). Preferred route is the OS-level AUMID (same path the
+/// Start tiles use); falls back to --app-id for browsers/versions that expose it.
+pub fn launch_installed_web_app(app: &InstalledWebApp) -> Result<(), String> {
+    if !app.aumid.is_empty() {
+        return std::process::Command::new("explorer.exe")
+            .arg(format!("shell:AppsFolder\\{}", app.aumid))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("以 AUMID 启动已安装应用失败: {}", e));
+    }
+    let path = resolve_app_executable_path(&app.browser_exe)
+        .ok_or_else(|| format!("未找到浏览器: {}", app.browser_exe))?;
+    let profile = if app.profile.is_empty() { "Default" } else { &app.profile };
     Command::new(&path)
         .arg(format!("--profile-directory={}", profile))
-        .arg(format!("--app-id={}", app_id))
+        .arg(format!("--app-id={}", app.id))
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("启动已安装网页应用失败: {}", e))

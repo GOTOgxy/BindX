@@ -50,7 +50,7 @@
 
 | 顺序 | 形态 | 动作 | 结果 |
 |------|------|------|------|
-| 1 | `app_window` 且匹配到已安装应用 | `<browser> --profile-directory=<P> --app-id=<ID>` | 完整安装身份窗口（应用菜单/固定任务栏等） |
+| 1 | `app_window` 且匹配到已安装应用 | `explorer.exe shell:AppsFolder\<AUMID>`（与开始菜单磁贴同一条 OS 路径；旧版浏览器回退 `--app-id`） | 完整安装身份窗口（应用菜单/固定任务栏等） |
 | 2 | `app_window` | `<browser> --app=<url>` | 独立 app 窗口（无标签栏地址栏） |
 | 3 | 上述失败或浏览器不可解析 | `ShellExecuteW("open", url)` | 系统默认浏览器新开标签（复用已运行实例） |
 | — | `tab` | 同 3（或带指定浏览器 exe 参数） | 浏览器标签页 |
@@ -61,7 +61,7 @@
 
 | 源 | 提供 | 覆盖 |
 |----|------|------|
-| 运行中 app 进程命令行（`NtQueryInformationProcess`） | `--app-id` / `--app-url` / `--profile-directory` 完整契约 | 该 app 窗口开过一次即被学会 |
+| **打开中的 app 窗口的 AppUserModelID**（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`，形如 `chatgpt.com-…!App`）与窗口标题 | OS 级启动钥匙 + 显示名 | 该 app 窗口开过一次即被学会并缓存 |
 | 本机缓存 `%LOCALAPPDATA%\BindX\webapps_cache.json` | 学习结果持久化 | 窗口关闭后仍认识；**不属于配置、不参与云同步** |
 | 浏览器 profile 注册目录 `<profile>\Web Applications\Manifest Resources\<id>` | id + 浏览器族 + profile | 所有装过的应用（与快捷方式/自启无关） |
 | 应用显示名 | `Web Applications\_crx__<id>\<名称>.ico` 文件名 | 名称匹配用 |
@@ -73,7 +73,7 @@
 
 编辑弹窗中的"已安装应用检测(实时)"行与触发时使用**同一套**匹配代码，所见即所得。检测只读本机公开契约、结果不写配置，云同步到其他设备后各自检测，人人可用。
 
-> 边界：Edge/Chrome 对**既无快捷方式、也从未启动过**的已安装应用，只在磁盘留匿名 id 与图标 PNG（显示名与 URL 不落明文），两条匹配路均无输入。此类应用在其 app 窗口首次打开时被进程命令行收获机制学会并缓存，之后永久可匹配。
+> 边界与模型修正：Chromium 采用**交接模型**——浏览器已运行时，新启的 app 进程把窗口交给主进程后自己退出，因此**进程命令行永远读不到 `--app-id`**（早期 harvest 方案据此失效）。真正稳定的契约是**窗口级**的：AppUserModelID（OS 注册身份，开始菜单无 .lnk 磁贴即由此而来）+ 窗口标题。故 harvest 改为枚举打开中的浏览器窗口读取 AUMID/标题，缓存后即可在窗口关闭后继续匹配与唤起。Edge/Chrome 对既无快捷方式、也从未打开过的已安装应用只在磁盘留匿名 id 与图标 PNG，此类应用在其 app 窗口首次打开时被学会。
 
 ### 1.4 界面约定
 

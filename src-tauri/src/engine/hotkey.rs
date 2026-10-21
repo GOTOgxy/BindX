@@ -314,7 +314,7 @@ fn handle_hotkey_trigger(
         // per-machine at trigger time; nothing machine-specific is stored.
         if app_window {
             if let Some(a) = find_installed_web_app_for_url(url.unwrap_or(""), &hints) {
-                if launch_installed_web_app(&a.browser_exe, &a.profile, &a.id).is_ok() {
+                if launch_installed_web_app(&a).is_ok() {
                     return;
                 }
             }

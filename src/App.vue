@@ -2873,6 +2873,10 @@ onMounted(async () => {
   try {
     appVersion.value = await invoke('get_app_version')
   } catch (e) {}
+  // While an edit modal is open, re-run installed-app detection periodically so
+  // opening a browser app window mid-edit is picked up without reopening the modal.
+  setInterval(redetectInstalledWebApp, 2500)
+
   // Recording capture runs in the capture phase, ahead of this ESC-close listener,
   // so ESC is recorded (not closing the modal) while a recorder is armed.
   window.addEventListener('keydown', onHotkeyRecordKeyDown, true)
