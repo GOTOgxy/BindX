@@ -93,6 +93,7 @@ Rust 原生后端 + Tauri v2 + Fluent 风格 WebUI。安装版或便携版任选
 
 - 依赖：Node.js ≥ 18、Rust ≥ 1.80；`npm install` → `npx tauri dev`。
 - 发布构建：`npx tauri build --no-bundle`；推送 `v*` tag 触发 CI 产出三产物。
-- 仓库路径含空格时 GNU 工具链会失败：用 `CARGO_TARGET_DIR=<无空格路径>` 或在 vcvars 终端用 MSVC（CI 即 MSVC）。
+- 构建产物固定在仓库根目录 `target/`（`.cargo/config.toml` 相对路径配置，已 gitignore），整个工作树可自由搬移、不绑定父目录。
+- 仓库路径含空格时 GNU 工具链的 `windres` 会失败：把仓库挪到无空格路径即解；临时办法 `CARGO_TARGET_DIR=<无空格路径>` 覆盖，或在 vcvars 终端用 MSVC（CI 即 MSVC，不受影响）。
 
 各子系统的**实际行为与实现逻辑**（触发流程、引擎生命周期、检测机制、更新链路、局部流程）见 [`docs/handbook.md`](docs/handbook.md)。

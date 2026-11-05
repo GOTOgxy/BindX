@@ -1,6 +1,6 @@
 use crate::config::HotkeyEntry;
 use crate::engine::win32::{
-    find_installed_web_app_for_url, find_window, get_vk_code, launch_app, launch_installed_web_app,
+    find_installed_web_app_for_url, find_window_for_entry, get_vk_code, launch_app, launch_installed_web_app,
     open_url_in_browser, resolve_app_executable_path, toggle_app_window,
 };
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -248,46 +248,8 @@ fn handle_hotkey_trigger(
     let hide_behavior = entry._runtime_profile.get("hide_behavior")
         .and_then(|v| v.as_str());
 
-    let (exe_name, title_keyword) = match entry.target_type.as_deref() {
-        Some("browser_tab") => {
-            (entry.exe_name.as_deref(), entry.title_keyword.as_deref())
-        }
-        Some("builtin") => {
-            let exe = if let Some(ref e) = entry.exe_name {
-                Some(e.as_str())
-            } else {
-                match entry.app.to_lowercase().as_str() {
-                    "cloudmusic" => Some("cloudmusic.exe"),
-                    "wechat" => Some("WeChat.exe"),
-                    "termius" => Some("Termius.exe"),
-                    "zotero" => Some("zotero.exe"),
-                    "vscode" | "code" => Some("Code.exe"),
-                    "terminal" => Some("wt.exe"),
-                    _ => None,
-                }
-            };
-            (exe, entry.title_keyword.as_deref())
-        }
-        _ => {
-            // General or app-name based
-            let exe = if let Some(ref e) = entry.exe_name {
-                Some(e.as_str())
-            } else {
-                match entry.app.to_lowercase().as_str() {
-                    "cloudmusic" => Some("cloudmusic.exe"),
-                    "wechat" => Some("WeChat.exe"),
-                    "termius" => Some("Termius.exe"),
-                    "zotero" => Some("zotero.exe"),
-                    "vscode" | "code" => Some("Code.exe"),
-                    "terminal" => Some("wt.exe"),
-                    _ => None,
-                }
-            };
-            (exe, entry.title_keyword.as_deref())
-        }
-    };
-
-    if let Some(hwnd) = find_window(exe_name, title_keyword) {
+    // Find window using smart identity match (AUMID for web apps, title/exe for win32)
+    if let Some(hwnd) = find_window_for_entry(entry) {
         toggle_app_window(hwnd, hide_behavior);
         return;
     }
@@ -298,6 +260,25 @@ fn handle_hotkey_trigger(
     if !entry.launch_if_not_running {
         return;
     }
+
+    let exe_name = match entry.target_type.as_deref() {
+        Some("browser_tab") => entry.exe_name.as_deref(),
+        Some("builtin") | _ => {
+            if let Some(ref e) = entry.exe_name {
+                Some(e.as_str())
+            } else {
+                match entry.app.to_lowercase().as_str() {
+                    "cloudmusic" => Some("cloudmusic.exe"),
+                    "wechat" => Some("WeChat.exe"),
+                    "termius" => Some("Termius.exe"),
+                    "zotero" => Some("zotero.exe"),
+                    "vscode" | "code" => Some("Code.exe"),
+                    "terminal" => Some("wt.exe"),
+                    _ => None,
+                }
+            }
+        }
+    };
 
     if entry.target_type.as_deref() == Some("browser_tab") {
         // For a browser tab, "launching" means reopening the target URL: ShellExecute

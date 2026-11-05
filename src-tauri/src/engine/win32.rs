@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::process::Command;
+use crate::config::HotkeyEntry;
 use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, MAX_PATH};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -204,21 +205,30 @@ pub fn get_window_exe_name(hwnd: HWND) -> Option<String> {
 struct SearchCriteria<'a> {
     exe_name: Option<&'a str>,
     title_keyword: Option<&'a str>,
+    hints: &'a [String],
+    is_web_app: bool,
     found_hwnd: Option<HWND>,
     hidden_candidate: Option<HWND>,
 }
 
-pub fn find_window(exe_name: Option<&str>, title_keyword: Option<&str>) -> Option<HWND> {
+pub fn find_window_ex(
+    exe_name: Option<&str>,
+    title_keyword: Option<&str>,
+    hints: &[String],
+    is_web_app: bool,
+) -> Option<HWND> {
     let exe_name = exe_name.map(|s| s.trim()).filter(|s| !s.is_empty());
     let title_keyword = title_keyword.map(|s| s.trim()).filter(|s| !s.is_empty());
 
-    if exe_name.is_none() && title_keyword.is_none() {
+    if exe_name.is_none() && title_keyword.is_none() && hints.is_empty() {
         return None;
     }
 
     let mut criteria = SearchCriteria {
         exe_name,
         title_keyword,
+        hints,
+        is_web_app,
         found_hwnd: None,
         hidden_candidate: None,
     };
@@ -245,15 +255,6 @@ pub fn find_window(exe_name: Option<&str>, title_keyword: Option<&str>) -> Optio
             return BOOL(1);
         }
 
-        let title = get_window_title(hwnd);
-
-        // Title keyword filter
-        if let Some(kw) = criteria.title_keyword {
-            if !title.to_lowercase().contains(&kw.to_lowercase()) {
-                return BOOL(1);
-            }
-        }
-
         // Exe filter
         if let Some(target_exe) = criteria.exe_name {
             if let Some(w_exe) = get_window_exe_name(hwnd) {
@@ -265,23 +266,53 @@ pub fn find_window(exe_name: Option<&str>, title_keyword: Option<&str>) -> Optio
             }
         }
 
+        let title = get_window_title(hwnd);
+        let mut matched = false;
+
+        // 1. Web App / PWA: AUMID check comes first!
+        // Solves ChatGPT dynamically renaming window title to current chat topic (e.g. "Thor Launcher替代方案").
+        if criteria.is_web_app {
+            if let Some(aumid) = window_aumid(hwnd) {
+                let aumid_low = aumid.to_lowercase();
+                if criteria.hints.iter().any(|h| {
+                    let h_low = h.trim().to_lowercase();
+                    h_low.len() >= 2 && aumid_low.contains(&h_low)
+                }) {
+                    matched = true;
+                }
+            }
+        }
+
+        // 2. Title keyword filter (fallback if not matched via AUMID)
+        if !matched {
+            if let Some(kw) = criteria.title_keyword {
+                if title.to_lowercase().contains(&kw.to_lowercase()) {
+                    matched = true;
+                }
+            } else if criteria.exe_name.is_some() && !criteria.is_web_app {
+                matched = true;
+            }
+        }
+
+        if !matched {
+            return BOOL(1);
+        }
+
         let is_visible = IsWindowVisible(hwnd).as_bool() && !is_window_cloaked(hwnd);
 
-        // Check if this looks like a valid primary application window
-        let is_primary_class = class_name.eq_ignore_ascii_case("OrpheusBrowserHost") // NetEase Cloud Music
-            || class_name.eq_ignore_ascii_case("WeChatMainWndForPC")                  // WeChat
-            || class_name.eq_ignore_ascii_case("Chrome_WidgetWin_1")                  // Chromium/Electron
-            || class_name.eq_ignore_ascii_case("MozillaWindowClass");                 // Firefox/Zotero
+        let is_primary_class = class_name.eq_ignore_ascii_case("OrpheusBrowserHost")
+            || class_name.eq_ignore_ascii_case("WeChatMainWndForPC")
+            || class_name.eq_ignore_ascii_case("Chrome_WidgetWin_1")
+            || class_name.eq_ignore_ascii_case("MozillaWindowClass");
 
         let has_meaningful_title = !title.trim().is_empty();
 
         if is_visible {
             if has_meaningful_title || is_primary_class {
                 criteria.found_hwnd = Some(hwnd);
-                return BOOL(0); // Stop enumeration, visible window found!
+                return BOOL(0);
             }
         } else {
-            // Invisible / tray window candidate
             if criteria.hidden_candidate.is_none() && (has_meaningful_title || is_primary_class) {
                 criteria.hidden_candidate = Some(hwnd);
             }
@@ -295,6 +326,52 @@ pub fn find_window(exe_name: Option<&str>, title_keyword: Option<&str>) -> Optio
     }
 
     criteria.found_hwnd.or(criteria.hidden_candidate)
+}
+
+pub fn find_window(exe_name: Option<&str>, title_keyword: Option<&str>) -> Option<HWND> {
+    find_window_ex(exe_name, title_keyword, &[], false)
+}
+
+pub fn find_window_for_entry(entry: &HotkeyEntry) -> Option<HWND> {
+    let is_web_app = entry.target_type.as_deref() == Some("browser_tab");
+    let (exe_name, title_keyword) = match entry.target_type.as_deref() {
+        Some("browser_tab") => {
+            (entry.exe_name.as_deref(), entry.title_keyword.as_deref())
+        }
+        Some("builtin") | _ => {
+            let exe = if let Some(ref e) = entry.exe_name {
+                Some(e.as_str())
+            } else {
+                match entry.app.to_lowercase().as_str() {
+                    "cloudmusic" => Some("cloudmusic.exe"),
+                    "wechat" => Some("WeChat.exe"),
+                    "termius" => Some("Termius.exe"),
+                    "zotero" => Some("zotero.exe"),
+                    "vscode" | "code" => Some("Code.exe"),
+                    "terminal" => Some("wt.exe"),
+                    _ => None,
+                }
+            };
+            (exe, entry.title_keyword.as_deref())
+        }
+    };
+
+    let mut hints = Vec::new();
+    if let Some(ref kw) = entry.title_keyword {
+        hints.push(kw.clone());
+    }
+    if let Some(ref n) = entry.name {
+        hints.push(n.clone());
+    }
+    if let Some(ref url) = entry.tab_url {
+        let domain = url_origin(url);
+        let domain_clean = domain.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+        if !domain_clean.is_empty() {
+            hints.push(domain_clean.to_string());
+        }
+    }
+
+    find_window_ex(exe_name, title_keyword, &hints, is_web_app)
 }
 
 pub fn activate_window(hwnd: HWND) {
@@ -632,7 +709,7 @@ pub fn list_installed_web_apps() -> Vec<InstalledWebApp> {
 /// AppUserModelID of a window — the OS-level identity of installed web apps
 /// (e.g. "chatgpt.com-DFCB3CE4_…!App"). This is also what backs the Start Menu
 /// tiles that have no .lnk behind them.
-fn window_aumid(hwnd: HWND) -> Option<String> {
+pub fn window_aumid(hwnd: HWND) -> Option<String> {
     use windows::Win32::UI::Shell::PropertiesSystem::{
         SHGetPropertyStoreForWindow, IPropertyStore, PROPERTYKEY,
     };
@@ -686,6 +763,7 @@ fn process_name_for_pid(pid: u32) -> Option<String> {
     }
 }
 
+#[allow(dead_code)]
 fn cmd_arg(cmd: &str, key: &str) -> Option<String> {
     let i = cmd.find(key)?;
     let mut rest = &cmd[i + key.len()..];
@@ -789,6 +867,30 @@ fn save_web_apps_cache(cache: &[InstalledWebApp]) {
 pub fn refresh_installed_web_apps() -> Vec<InstalledWebApp> {
     let mut apps = load_web_apps_cache();
     let mut changed = false;
+
+    // 1. Windows AppModel PWA Registry (most reliable on Windows 10/11)
+    for pwa in list_windows_pwa_apps() {
+        match apps.iter_mut().find(|c| (!c.aumid.is_empty() && c.aumid == pwa.aumid) || (!c.id.is_empty() && c.id == pwa.id)) {
+            Some(slot) => {
+                if slot.aumid.is_empty() && !pwa.aumid.is_empty() {
+                    slot.aumid = pwa.aumid;
+                    changed = true;
+                }
+                if slot.name.is_empty() && !pwa.name.is_empty() {
+                    slot.name = pwa.name;
+                    changed = true;
+                }
+                if slot.app_url.is_empty() && !pwa.app_url.is_empty() {
+                    slot.app_url = pwa.app_url;
+                    changed = true;
+                }
+            }
+            None => {
+                apps.push(pwa);
+                changed = true;
+            }
+        }
+    }
     for h in harvest_running_web_apps() {
         match apps.iter_mut().find(|c| c.id == h.id && c.profile == h.profile) {
             Some(slot) => {
@@ -860,6 +962,13 @@ pub fn find_installed_web_app_for_url(url: &str, hints: &[String]) -> Option<Ins
         let want_origin = url_origin(url);
         if let Some(app) = apps.iter().find(|a| {
             if a.app_url.trim().is_empty() {
+                let aumid_low = a.aumid.to_lowercase();
+                if !want_origin.is_empty() {
+                    let domain = want_origin.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+                    if !domain.is_empty() && aumid_low.contains(domain) {
+                        return true;
+                    }
+                }
                 return false;
             }
             let got = url_norm(&a.app_url);
@@ -879,13 +988,12 @@ pub fn find_installed_web_app_for_url(url: &str, hints: &[String]) -> Option<Ins
     }
     apps.iter().find(|a| {
         let name = a.name.trim().to_lowercase();
-        !name.is_empty() && hints.iter().any(|h| name.contains(h.as_str()) || h.contains(name.as_str()))
+        let aumid_low = a.aumid.trim().to_lowercase();
+        (!name.is_empty() && hints.iter().any(|h| name.contains(h.as_str()) || h.contains(name.as_str())))
+            || (!aumid_low.is_empty() && hints.iter().any(|h| aumid_low.contains(h.as_str())))
     }).cloned()
 }
 
-/// Launch an installed web app with its full browser identity (app menu, pins,
-/// Start Menu presence). Preferred route is the OS-level AUMID (same path the
-/// Start tiles use); falls back to --app-id for browsers/versions that expose it.
 pub fn launch_installed_web_app(app: &InstalledWebApp) -> Result<(), String> {
     if !app.aumid.is_empty() {
         return std::process::Command::new("explorer.exe")
@@ -909,36 +1017,159 @@ pub fn launch_installed_web_app(app: &InstalledWebApp) -> Result<(), String> {
 /// 64/32-bit views). Catches per-user installers (Termius, VS Code, etc.) that
 /// have no App Paths entry. Matches DisplayName prefix, then prefers
 /// DisplayIcon and falls back to InstallLocation\<exe>.
+unsafe fn reg_string(hkey: HKEY, value: &str) -> Option<String> {
+    use windows::Win32::System::Registry::RegQueryValueExW;
+    let value_wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut buf = vec![0u16; 512];
+    let mut cb_data = (buf.len() * 2) as u32;
+    let mut reg_type = REG_SZ;
+    let status = RegQueryValueExW(
+        hkey,
+        windows::core::PCWSTR(value_wide.as_ptr()),
+        None,
+        Some(&mut reg_type),
+        Some(buf.as_mut_ptr() as *mut u8),
+        Some(&mut cb_data),
+    );
+    if status.is_ok() && cb_data > 0 {
+        let len = (cb_data as usize / 2).saturating_sub(1);
+        return Some(OsString::from_wide(&buf[..len]).to_string_lossy().to_string());
+    }
+    None
+}
+
+/// Enumerate installed PWA applications registered with Windows AppModel
+/// (e.g. Edge and Chrome web apps installed via "Install site as app").
+/// Registered under:
+/// HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Families
+pub fn list_windows_pwa_apps() -> Vec<InstalledWebApp> {
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+    };
+
+    let mut out = Vec::new();
+    let families_path = "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Families";
+    let families_wide: Vec<u16> = families_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut h_families = HKEY::default();
+    unsafe {
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            windows::core::PCWSTR(families_wide.as_ptr()),
+            0,
+            KEY_READ,
+            &mut h_families,
+        ).is_err() {
+            return out;
+        }
+
+        let packages_base = "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages";
+
+        let mut index = 0u32;
+        loop {
+            let mut name_buf = [0u16; 256];
+            let mut name_len = name_buf.len() as u32;
+            let rc = RegEnumKeyExW(
+                h_families,
+                index,
+                windows::core::PWSTR(name_buf.as_mut_ptr()),
+                &mut name_len,
+                None,
+                windows::core::PWSTR::null(),
+                None,
+                None,
+            );
+            if rc.is_err() {
+                break;
+            }
+            index += 1;
+
+            let family_name = OsString::from_wide(&name_buf[..name_len as usize]).to_string_lossy().to_string();
+
+            // PWA family names typically follow: <domain.tld>-<HASH>_<PUBLISHER_ID>
+            // E.g. "chatgpt.com-DFCB3CE4_ch69rtgtz055j" or "www.qianwen.com-E1134EAD_gr2d9dnezjevw"
+            if !family_name.contains('.') || !family_name.contains('_') || !family_name.contains('-') {
+                continue;
+            }
+
+            let aumid = format!("{}!App", family_name);
+
+            // Extract domain for app_url
+            // E.g. "chatgpt.com-DFCB3CE4" -> "chatgpt.com"
+            let prefix = family_name.split('_').next().unwrap_or(&family_name);
+            let domain = prefix.split('-').next().unwrap_or(prefix);
+            let app_url = format!("https://{}/", domain);
+
+            // Open the family subkey to get the package full name
+            let family_sub_path = format!("{}\\{}", families_path, family_name);
+            let family_sub_wide: Vec<u16> = family_sub_path.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut h_family_sub = HKEY::default();
+            let mut display_name = String::new();
+
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                windows::core::PCWSTR(family_sub_wide.as_ptr()),
+                0,
+                KEY_READ,
+                &mut h_family_sub,
+            ).is_ok() {
+                let mut pkg_buf = [0u16; 256];
+                let mut pkg_len = pkg_buf.len() as u32;
+                if RegEnumKeyExW(
+                    h_family_sub,
+                    0,
+                    windows::core::PWSTR(pkg_buf.as_mut_ptr()),
+                    &mut pkg_len,
+                    None,
+                    windows::core::PWSTR::null(),
+                    None,
+                    None,
+                ).is_ok() {
+                    let pkg_name = OsString::from_wide(&pkg_buf[..pkg_len as usize]).to_string_lossy().to_string();
+                    let pkg_path = format!("{}\\{}", packages_base, pkg_name);
+                    let pkg_wide: Vec<u16> = pkg_path.encode_utf16().chain(std::iter::once(0)).collect();
+                    let mut h_pkg = HKEY::default();
+                    if RegOpenKeyExW(
+                        HKEY_CURRENT_USER,
+                        windows::core::PCWSTR(pkg_wide.as_ptr()),
+                        0,
+                        KEY_READ,
+                        &mut h_pkg,
+                    ).is_ok() {
+                        if let Some(dn) = reg_string(h_pkg, "DisplayName") {
+                            display_name = dn;
+                        }
+                        let _ = RegCloseKey(h_pkg);
+                    }
+                }
+                let _ = RegCloseKey(h_family_sub);
+            }
+
+            if display_name.is_empty() {
+                display_name = domain.split('.').next().unwrap_or(domain).to_string();
+            }
+
+            out.push(InstalledWebApp {
+                id: aumid.clone(),
+                name: display_name,
+                profile: String::new(),
+                browser_exe: "msedge.exe".to_string(),
+                app_url,
+                aumid,
+            });
+        }
+
+        let _ = RegCloseKey(h_families);
+    }
+
+    out
+}
+
+
 fn find_app_path_from_uninstall(exe_name: &str) -> Option<String> {
     use windows::Win32::System::Registry::{RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY};
     let base = exe_name.to_lowercase();
     let base = base.trim_end_matches(".exe");
-
-    unsafe extern "system" fn reg_string(
-        hkey: HKEY,
-        value: &str,
-    ) -> Option<String> {
-        use windows::Win32::System::Registry::RegQueryValueExW;
-        let value_wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe {
-            let mut buf = vec![0u16; 512];
-            let mut cb_data = (buf.len() * 2) as u32;
-            let mut reg_type = REG_SZ;
-            let status = RegQueryValueExW(
-                hkey,
-                windows::core::PCWSTR(value_wide.as_ptr()),
-                None,
-                Some(&mut reg_type),
-                Some(buf.as_mut_ptr() as *mut u8),
-                Some(&mut cb_data),
-            );
-            if status.is_ok() && cb_data > 0 {
-                let len = (cb_data as usize / 2).saturating_sub(1);
-                return Some(OsString::from_wide(&buf[..len]).to_string_lossy().to_string());
-            }
-            None
-        }
-    }
 
     unsafe {
         for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {

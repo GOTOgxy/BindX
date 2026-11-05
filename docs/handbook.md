@@ -245,7 +245,7 @@ UI 状态机：idle → downloading（update-progress 事件：percent/message�
 
 仓库路径含空格时（如 `D:\Program Files\...`）：
 
-- **GNU 工具链**：tauri-winres 调 `windres` 时资源路径未转义 → `cc1.exe: fatal error: Files\app\...`。解法：`CARGO_TARGET_DIR=D:/bindx-target npx tauri build --no-bundle`（产物目录无空格即可）。
+- **GNU 工具链**：tauri-winres 调 `windres` 时资源路径未转义 → `cc1.exe: fatal error: Files\app\...`。产物目录已经 `.cargo/config.toml` 固定为仓库根 `target/`（相对路径、已 gitignore），因此**把仓库挪到无空格路径即彻底解决**；留在空格路径期间的临时办法：`CARGO_TARGET_DIR=<无空格路径>` 覆盖，或在 vcvars 终端用 MSVC。
 - **Git Bash 里验证 MSVC**：coreutils 的 `link` 遮蔽 MSVC `link.exe` → 需在 vcvars 终端中进行。
 - **管道掩码**：`cargo check | tail` 的退出码是 `tail` 的；验证请单独捕获日志并打印 `EXIT=$?`。
 - CI 统一 MSVC，不受影响。
@@ -256,10 +256,10 @@ GNU 构建的 exe 需 `WebView2Loader.dll` 傍身；MSVC 构建为真·单文件
 
 ### 5.4 打包与版本
 
-- 发布构建：`npx tauri build --no-bundle`，产物 `target/release/bindx.exe`（或 `CARGO_TARGET_DIR` 指定处）。
+- 发布构建：`npx tauri build --no-bundle`，产物 `<仓库根>/target/release/bindx.exe`（GNU 构建旁有 `WebView2Loader.dll`；MSVC 为真单文件）。
 - 版本号三处同步：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`；UI 显示读 `CARGO_PKG_VERSION`。
 - 安装脚本版本由 CI 以 `/DMyAppVersion=` 注入（本地默认值仅作兜底）。
 
 ### 5.5 辅助工具
 
-- `cargo run --release --example scan_apps`：打印本机已安装网页应用检测明细（GNU 构建需把 `WebView2Loader.dll` 放到 example exe 旁）。
+- `cargo run --release --example scan_apps` / `dump_aumid`：打印本机已安装网页应用检测明细 / 窗口 AUMID。GNU 构建需把 `target/release/WebView2Loader.dll` 复制到 example exe 旁再运行。
