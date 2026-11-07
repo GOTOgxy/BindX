@@ -27,10 +27,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use serde::{Deserialize, Serialize};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowTextLengthW,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow,
-    SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WS_EX_TOOLWINDOW,
+    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowPlacement,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    IsZoomed, SetForegroundWindow, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST,
+    HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOW, SW_SHOWMAXIMIZED, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED, WS_EX_TOOLWINDOW,
 };
 
 pub const BINDX_EXTRA_INFO: usize = 0x42494E58;
@@ -202,11 +203,50 @@ pub fn get_window_exe_name(hwnd: HWND) -> Option<String> {
     }
 }
 
+
+pub fn normalize_exe_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_lowercase();
+    let base = lower.trim_end_matches(".exe");
+    match base {
+        "microsoft edge" | "msedge" | "edge" => "msedge.exe".to_string(),
+        "google chrome" | "chrome" => "chrome.exe".to_string(),
+        "firefox" | "mozilla firefox" => "firefox.exe".to_string(),
+        "brave" => "brave.exe".to_string(),
+        "opera" => "opera.exe".to_string(),
+        "wechat" | "微信" => "WeChat.exe".to_string(),
+        "cloudmusic" | "网易云音乐" => "cloudmusic.exe".to_string(),
+        "zotero" => "zotero.exe".to_string(),
+        "termius" => "Termius.exe".to_string(),
+        "vscode" | "code" => "Code.exe".to_string(),
+        "terminal" | "wt" => "wt.exe".to_string(),
+        _ => {
+            if lower.ends_with(".exe") {
+                trimmed.to_string()
+            } else {
+                format!("{}.exe", trimmed)
+            }
+        }
+    }
+}
+
+pub fn is_pwa_window(hwnd: HWND) -> bool {
+    if let Some(aumid) = window_aumid(hwnd) {
+        let a = aumid.to_lowercase();
+        if a.ends_with("!app") && (a.contains('-') || a.contains('.')) {
+            return true;
+        }
+    }
+    false
+}
+
 struct SearchCriteria<'a> {
-    exe_name: Option<&'a str>,
+    exe_name: Option<String>,
     title_keyword: Option<&'a str>,
     hints: &'a [String],
     is_web_app: bool,
+    fg_hwnd: HWND,
+    found_fg_hwnd: Option<HWND>,
     found_hwnd: Option<HWND>,
     hidden_candidate: Option<HWND>,
 }
@@ -217,18 +257,22 @@ pub fn find_window_ex(
     hints: &[String],
     is_web_app: bool,
 ) -> Option<HWND> {
-    let exe_name = exe_name.map(|s| s.trim()).filter(|s| !s.is_empty());
+    let norm_exe = exe_name.map(|s| normalize_exe_name(s)).filter(|s| !s.is_empty());
     let title_keyword = title_keyword.map(|s| s.trim()).filter(|s| !s.is_empty());
 
-    if exe_name.is_none() && title_keyword.is_none() && hints.is_empty() {
+    if norm_exe.is_none() && title_keyword.is_none() && hints.is_empty() {
         return None;
     }
 
+    let fg_hwnd = unsafe { GetForegroundWindow() };
+
     let mut criteria = SearchCriteria {
-        exe_name,
+        exe_name: norm_exe,
         title_keyword,
         hints,
         is_web_app,
+        fg_hwnd,
+        found_fg_hwnd: None,
         found_hwnd: None,
         hidden_candidate: None,
     };
@@ -255,8 +299,8 @@ pub fn find_window_ex(
             return BOOL(1);
         }
 
-        // Exe filter
-        if let Some(target_exe) = criteria.exe_name {
+        // Exe filter (using normalized exe names)
+        if let Some(ref target_exe) = criteria.exe_name {
             if let Some(w_exe) = get_window_exe_name(hwnd) {
                 if !w_exe.eq_ignore_ascii_case(target_exe) {
                     return BOOL(1);
@@ -281,9 +325,21 @@ pub fn find_window_ex(
                     matched = true;
                 }
             }
+        } else {
+            // 2. Regular desktop application (e.g. general Edge / Chrome browser window):
+            // IMPORTANT: If targeting a browser exe (msedge.exe / chrome.exe) as a general desktop client
+            // without a specific title keyword, WE MUST EXCLUDE PWA windows (like ChatGPT/Gemini)!
+            if let Some(ref target_exe) = criteria.exe_name {
+                let t_low = target_exe.to_lowercase();
+                if (t_low == "msedge.exe" || t_low == "chrome.exe") && criteria.title_keyword.is_none() {
+                    if is_pwa_window(hwnd) {
+                        return BOOL(1); // Skip PWA windows so we don't accidentally control ChatGPT/Gemini
+                    }
+                }
+            }
         }
 
-        // 2. Title keyword filter (fallback if not matched via AUMID)
+        // 3. Title keyword filter (fallback if not matched via AUMID)
         if !matched {
             if let Some(kw) = criteria.title_keyword {
                 if title.to_lowercase().contains(&kw.to_lowercase()) {
@@ -309,8 +365,17 @@ pub fn find_window_ex(
 
         if is_visible {
             if has_meaningful_title || is_primary_class {
-                criteria.found_hwnd = Some(hwnd);
-                return BOOL(0);
+                // If this is currently the active foreground window, remember it with highest priority!
+                if hwnd == criteria.fg_hwnd {
+                    criteria.found_fg_hwnd = Some(hwnd);
+                }
+                if criteria.found_hwnd.is_none() {
+                    criteria.found_hwnd = Some(hwnd);
+                }
+                // If we already found the foreground window, we can stop early
+                if criteria.found_fg_hwnd.is_some() {
+                    return BOOL(0);
+                }
             }
         } else {
             if criteria.hidden_candidate.is_none() && (has_meaningful_title || is_primary_class) {
@@ -325,7 +390,10 @@ pub fn find_window_ex(
         let _ = EnumWindows(Some(enum_proc), LPARAM(&mut criteria as *mut _ as isize));
     }
 
-    criteria.found_hwnd.or(criteria.hidden_candidate)
+    // Foreground window takes priority when user is toggling an active browser/app window to hide/minimize
+    criteria.found_fg_hwnd
+        .or(criteria.found_hwnd)
+        .or(criteria.hidden_candidate)
 }
 
 pub fn find_window(exe_name: Option<&str>, title_keyword: Option<&str>) -> Option<HWND> {
@@ -349,6 +417,8 @@ pub fn find_window_for_entry(entry: &HotkeyEntry) -> Option<HWND> {
                     "zotero" => Some("zotero.exe"),
                     "vscode" | "code" => Some("Code.exe"),
                     "terminal" => Some("wt.exe"),
+                    "edge" | "msedge" => Some("msedge.exe"),
+                    "chrome" => Some("chrome.exe"),
                     _ => None,
                 }
             };
@@ -376,11 +446,29 @@ pub fn find_window_for_entry(entry: &HotkeyEntry) -> Option<HWND> {
 
 pub fn activate_window(hwnd: HWND) {
     unsafe {
+        let mut wp = WINDOWPLACEMENT::default();
+        wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+        let got_placement = GetWindowPlacement(hwnd, &mut wp).is_ok();
+
+        // Check if the window is currently maximized or was maximized prior to being minimized/hidden
+        let is_max = IsZoomed(hwnd).as_bool()
+            || (got_placement && (wp.flags.0 & WPF_RESTORETOMAXIMIZED.0) != 0);
+
         if IsIconic(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+            // If the minimized window was previously maximized, restore it as maximized;
+            // otherwise restore normal size and position.
+            if is_max {
+                let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+            } else {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
         } else {
+            // Window is already not iconic (e.g. was hidden via SW_HIDE, or behind other windows).
+            // Crucial: DO NOT call SW_RESTORE here! SW_RESTORE forces maximized windows to unmaximize!
             let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+            if is_max {
+                let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+            }
         }
 
         // Ensure window pops to topmost and un-cloaks
@@ -1264,14 +1352,17 @@ fn find_app_path_from_uninstall(exe_name: &str) -> Option<String> {
 }
 
 pub fn resolve_app_executable_path(exe_name: &str) -> Option<String> {
-    if let Some(p) = find_running_process_path(exe_name) {
-        return Some(p);
-    }
-    if let Some(p) = find_app_path_from_registry(exe_name) {
-        return Some(p);
-    }
-    if let Some(p) = find_app_path_from_uninstall(exe_name) {
-        return Some(p);
+    let norm = normalize_exe_name(exe_name);
+    for name in [&norm as &str, exe_name] {
+        if let Some(p) = find_running_process_path(name) {
+            return Some(p);
+        }
+        if let Some(p) = find_app_path_from_registry(name) {
+            return Some(p);
+        }
+        if let Some(p) = find_app_path_from_uninstall(name) {
+            return Some(p);
+        }
     }
     let mut common_dirs: Vec<String> = vec![
         r"C:\Program Files".to_string(),

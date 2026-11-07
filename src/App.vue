@@ -1270,6 +1270,20 @@
               <button 
                 type="button" 
                 class="preset-chip" 
+                @click="applyHotkeyPreset('msedge')"
+              >
+                Edge 浏览器
+              </button>
+              <button 
+                type="button" 
+                class="preset-chip" 
+                @click="applyHotkeyPreset('chrome')"
+              >
+                Chrome 浏览器
+              </button>
+              <button 
+                type="button" 
+                class="preset-chip" 
                 @click="applyHotkeyPreset('browser_tab')"
               >
                 千问(网页应用)
@@ -2143,6 +2157,27 @@ const applyHotkeyPreset = (preset) => {
       hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
       hotkeyModal.value.data.launch_if_not_running = true
       break
+    case 'msedge':
+    case 'edge':
+      hotkeyModal.value.data.app = 'edge'
+      hotkeyModal.value.data.name = 'Microsoft Edge'
+      hotkeyModal.value.data.target_type = 'win32'
+      hotkeyModal.value.data.exe_name = 'msedge.exe'
+      hotkeyModal.value.data.title_keyword = ''
+      hotkeyModal.value.data.install_path = ''
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      hotkeyModal.value.data.launch_if_not_running = true
+      break
+    case 'chrome':
+      hotkeyModal.value.data.app = 'chrome'
+      hotkeyModal.value.data.name = 'Google Chrome'
+      hotkeyModal.value.data.target_type = 'win32'
+      hotkeyModal.value.data.exe_name = 'chrome.exe'
+      hotkeyModal.value.data.title_keyword = ''
+      hotkeyModal.value.data.install_path = ''
+      hotkeyModal.value.data._runtime_profile.hide_behavior = 'minimize'
+      hotkeyModal.value.data.launch_if_not_running = true
+      break
     case 'browser_tab':
       hotkeyModal.value.data.target_type = 'browser_tab'
       hotkeyModal.value.data.exe_name = ''
@@ -2210,6 +2245,21 @@ const saveHotkeyModal = async () => {
       hotkeyModal.value.data.name = '快捷键应用'
     }
   }
+  if (hotkeyModal.value.data.target_type === 'win32' && hotkeyModal.value.data.exe_name) {
+    const rawExe = hotkeyModal.value.data.exe_name.trim().toLowerCase()
+    if (['microsoft edge', 'edge', 'msedge'].includes(rawExe)) {
+      hotkeyModal.value.data.exe_name = 'msedge.exe'
+      if (!hotkeyModal.value.data.name || hotkeyModal.value.data.name === 'Edge') {
+        hotkeyModal.value.data.name = 'Microsoft Edge'
+      }
+    } else if (['google chrome', 'chrome'].includes(rawExe)) {
+      hotkeyModal.value.data.exe_name = 'chrome.exe'
+      if (!hotkeyModal.value.data.name || hotkeyModal.value.data.name === 'Chrome') {
+        hotkeyModal.value.data.name = 'Google Chrome'
+      }
+    }
+  }
+
   if (!hotkeyModal.value.data.app) {
     hotkeyModal.value.data.app = hotkeyModal.value.data.name || 'app'
   }
