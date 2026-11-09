@@ -346,16 +346,35 @@
             <table class="data-table">
               <thead>
                 <tr>
+                  <th style="width: 40px; text-align: center;"></th>
                   <th style="width: 70px;">状态</th>
                   <th>快捷键</th>
                   <th>目标应用</th>
                   <th>类型</th>
                   <th>行为</th>
-                  <th style="width: 110px;">操作</th>
+                  <th style="width: 145px;">操作</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(entry, index) in config.hotkeys.entries" :key="index">
+                <tr 
+                  v-for="(entry, index) in config.hotkeys.entries" 
+                  :key="index"
+                  :data-hotkey-row="index"
+                  :class="{ 
+                    'is-dragging': draggingHotkeyIndex === index,
+                    'is-drag-over-top': draggingHotkeyIndex !== null && dragOverHotkeyIndex === index && dragOverHotkeyPos === 'top' && draggingHotkeyIndex !== index,
+                    'is-drag-over-bottom': draggingHotkeyIndex !== null && dragOverHotkeyIndex === index && dragOverHotkeyPos === 'bottom' && draggingHotkeyIndex !== index
+                  }"
+                >
+                  <td class="drag-handle-cell">
+                    <div 
+                      class="drag-handle" 
+                      title="按住拖动调整顺序"
+                      @pointerdown="startHotkeyDrag($event, index)"
+                    >
+                      <GripVertical class="w-4 h-4" />
+                    </div>
+                  </td>
                   <td>
                     <label class="toggle-switch mini">
                       <input type="checkbox" v-model="entry.enabled" @change="saveAll" />
@@ -385,6 +404,12 @@
                   </td>
                   <td>
                     <div class="table-actions">
+                      <button class="btn-icon" :disabled="index === 0" title="上移" @click="moveHotkey(index, -1)">
+                        <ChevronUp class="w-3.5 h-3.5" />
+                      </button>
+                      <button class="btn-icon" :disabled="index === config.hotkeys.entries.length - 1" title="下移" @click="moveHotkey(index, 1)">
+                        <ChevronDown class="w-3.5 h-3.5" />
+                      </button>
                       <button class="btn-icon" title="编辑" @click="editHotkey(entry, index)">
                         <Edit class="w-3.5 h-3.5" />
                       </button>
@@ -516,16 +541,35 @@
               <table class="data-table">
                 <thead>
                   <tr>
+                    <th style="width: 40px; text-align: center;"></th>
                     <th style="width: 70px;">状态</th>
                     <th style="width: 220px;">触发按键</th>
                     <th style="width: 40px; text-align: center;"></th>
                     <th style="width: 220px;">输出按键</th>
                     <th>描述</th>
-                    <th style="width: 100px; text-align: center;">操作</th>
+                    <th style="width: 145px; text-align: center;">操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(km, idx) in (config.mouse?.mappings || [])" :key="idx">
+                  <tr 
+                    v-for="(km, idx) in (config.mouse?.mappings || [])" 
+                    :key="idx"
+                    :data-remap-row="idx"
+                    :class="{ 
+                      'is-dragging': draggingRemapIndex === idx,
+                      'is-drag-over-top': draggingRemapIndex !== null && dragOverRemapIndex === idx && dragOverRemapPos === 'top' && draggingRemapIndex !== idx,
+                      'is-drag-over-bottom': draggingRemapIndex !== null && dragOverRemapIndex === idx && dragOverRemapPos === 'bottom' && draggingRemapIndex !== idx
+                    }"
+                  >
+                    <td class="drag-handle-cell">
+                      <div 
+                        class="drag-handle" 
+                        title="按住拖动调整顺序"
+                        @pointerdown="startRemapDrag($event, idx)"
+                      >
+                        <GripVertical class="w-4 h-4" />
+                      </div>
+                    </td>
                     <td>
                       <label class="toggle-switch mini">
                         <input type="checkbox" v-model="km.enabled" @change="saveAll" />
@@ -557,6 +601,12 @@
                     </td>
                     <td style="text-align: center;">
                       <div class="flex items-center justify-center gap-1">
+                        <button class="btn-icon" :disabled="idx === 0" title="上移" @click="moveRemap(idx, -1)">
+                          <ChevronUp class="w-3.5 h-3.5" />
+                        </button>
+                        <button class="btn-icon" :disabled="idx === (config.mouse?.mappings?.length || 0) - 1" title="下移" @click="moveRemap(idx, 1)">
+                          <ChevronDown class="w-3.5 h-3.5" />
+                        </button>
                         <button class="btn-icon" title="编辑映射" @click="openEditRemapModal(km, idx)">
                           <Edit class="w-3.5 h-3.5" />
                         </button>
@@ -567,7 +617,7 @@
                     </td>
                   </tr>
                   <tr v-if="!config.mouse?.mappings || config.mouse.mappings.length === 0">
-                    <td colspan="6" class="text-center py-10 text-muted text-xs">
+                    <td colspan="7" class="text-center py-10 text-muted text-xs">
                       暂无映射规则，可使用上方的“按键检测”或“常用预设”快速创建
                     </td>
                   </tr>
@@ -1080,6 +1130,23 @@
                 <div class="tile-action">
                   <label class="toggle-switch">
                     <input type="checkbox" v-model="config.app.autostart_enabled" @change="saveAll" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Tile: Autostart Minimized -->
+              <div class="setting-tile">
+                <div class="tile-icon-box autostart-box">
+                  <Minimize2 class="w-5 h-5 text-indigo-500" />
+                </div>
+                <div class="tile-content">
+                  <span class="tile-title">开机启动最小化</span>
+                  <span class="tile-desc">开机自启时静默保持托盘后台运行，不弹出主窗口</span>
+                </div>
+                <div class="tile-action">
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="config.app.autostart_minimized" @change="saveAll" />
                     <span class="slider"></span>
                   </label>
                 </div>
@@ -1668,7 +1735,11 @@ import {
   Radio,
   Layers,
   Pin,
-  LayoutGrid
+  LayoutGrid,
+  GripVertical,
+  Minimize2,
+  ChevronUp,
+  ChevronDown
 } from '@lucide/vue'
 
 const appWindow = getCurrentWindow()
@@ -1784,6 +1855,7 @@ const config = ref({
     hotkey_running: true,
     mouse_running: false,
     autostart_enabled: true,
+    autostart_minimized: true,
     font_preset: '常规',
     output_delay_ms: 20,
     restore_held_modifiers: true,
@@ -1830,6 +1902,7 @@ const fetchConfig = async () => {
     const data = await invoke('get_config')
     if (data) {
       if (!data.app) data.app = {}
+      if (data.app.autostart_minimized === undefined) data.app.autostart_minimized = true
       if (!data.app.theme) data.app.theme = 'light'
       if (!data.mouse) data.mouse = { mappings: [], mouse_mappings: [] }
       if (!data.mouse.mappings) data.mouse.mappings = []
@@ -2287,6 +2360,201 @@ const deleteHotkey = (index) => {
   config.value.hotkeys.entries.splice(index, 1)
   saveAll()
 }
+
+// Hotkey Reordering (Pointer Drag + Move Buttons)
+const draggingHotkeyIndex = ref(null)
+const dragOverHotkeyIndex = ref(null)
+const dragOverHotkeyPos = ref(null)
+
+const moveHotkey = (index, delta) => {
+  const targetIndex = index + delta
+  const list = config.value.hotkeys?.entries
+  if (list && targetIndex >= 0 && targetIndex < list.length) {
+    const [item] = list.splice(index, 1)
+    list.splice(targetIndex, 0, item)
+    saveAll()
+  }
+}
+
+const startHotkeyDrag = (e, index) => {
+  if (e.button !== 0) return
+  e.preventDefault()
+
+  draggingHotkeyIndex.value = index
+  dragOverHotkeyIndex.value = index
+  dragOverHotkeyPos.value = 'top'
+
+  document.body.style.cursor = 'grabbing'
+  document.body.style.userSelect = 'none'
+
+  const onPointerMove = (moveEvent) => {
+    moveEvent.preventDefault()
+    const rows = Array.from(document.querySelectorAll('[data-hotkey-row]'))
+    if (rows.length === 0) return
+
+    const y = moveEvent.clientY
+    const firstRect = rows[0].getBoundingClientRect()
+    const lastRect = rows[rows.length - 1].getBoundingClientRect()
+
+    if (y < firstRect.top) {
+      dragOverHotkeyIndex.value = 0
+      dragOverHotkeyPos.value = 'top'
+      return
+    }
+    if (y > lastRect.bottom) {
+      dragOverHotkeyIndex.value = rows.length - 1
+      dragOverHotkeyPos.value = 'bottom'
+      return
+    }
+
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect()
+      if (y >= rect.top && y <= rect.bottom) {
+        const idx = parseInt(row.getAttribute('data-hotkey-row'), 10)
+        if (!isNaN(idx)) {
+          const relY = y - rect.top
+          dragOverHotkeyIndex.value = idx
+          dragOverHotkeyPos.value = relY < rect.height / 2 ? 'top' : 'bottom'
+        }
+        break
+      }
+    }
+  }
+
+  const onPointerUp = () => {
+    window.removeEventListener('pointermove', onPointerMove)
+    window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointercancel', onPointerUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+
+    const fromIdx = draggingHotkeyIndex.value
+    const targetIdx = dragOverHotkeyIndex.value
+    const pos = dragOverHotkeyPos.value
+
+    draggingHotkeyIndex.value = null
+    dragOverHotkeyIndex.value = null
+    dragOverHotkeyPos.value = null
+
+    if (fromIdx !== null && targetIdx !== null && config.value.hotkeys?.entries) {
+      let toIdx = targetIdx
+      if (pos === 'bottom') {
+        toIdx = targetIdx + 1
+      }
+      if (fromIdx < toIdx) {
+        toIdx--
+      }
+      if (fromIdx !== toIdx) {
+        const list = config.value.hotkeys.entries
+        const [movedItem] = list.splice(fromIdx, 1)
+        list.splice(toIdx, 0, movedItem)
+        saveAll()
+      }
+    }
+  }
+
+  window.addEventListener('pointermove', onPointerMove, { passive: false })
+  window.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('pointercancel', onPointerUp)
+}
+
+// Remap Reordering (Pointer Drag + Move Buttons)
+const draggingRemapIndex = ref(null)
+const dragOverRemapIndex = ref(null)
+const dragOverRemapPos = ref(null)
+
+const moveRemap = (index, delta) => {
+  const targetIndex = index + delta
+  const list = config.value.mouse?.mappings
+  if (list && targetIndex >= 0 && targetIndex < list.length) {
+    const [item] = list.splice(index, 1)
+    list.splice(targetIndex, 0, item)
+    saveAll()
+  }
+}
+
+const startRemapDrag = (e, index) => {
+  if (e.button !== 0) return
+  e.preventDefault()
+
+  draggingRemapIndex.value = index
+  dragOverRemapIndex.value = index
+  dragOverRemapPos.value = 'top'
+
+  document.body.style.cursor = 'grabbing'
+  document.body.style.userSelect = 'none'
+
+  const onPointerMove = (moveEvent) => {
+    moveEvent.preventDefault()
+    const rows = Array.from(document.querySelectorAll('[data-remap-row]'))
+    if (rows.length === 0) return
+
+    const y = moveEvent.clientY
+    const firstRect = rows[0].getBoundingClientRect()
+    const lastRect = rows[rows.length - 1].getBoundingClientRect()
+
+    if (y < firstRect.top) {
+      dragOverRemapIndex.value = 0
+      dragOverRemapPos.value = 'top'
+      return
+    }
+    if (y > lastRect.bottom) {
+      dragOverRemapIndex.value = rows.length - 1
+      dragOverRemapPos.value = 'bottom'
+      return
+    }
+
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect()
+      if (y >= rect.top && y <= rect.bottom) {
+        const idx = parseInt(row.getAttribute('data-remap-row'), 10)
+        if (!isNaN(idx)) {
+          const relY = y - rect.top
+          dragOverRemapIndex.value = idx
+          dragOverRemapPos.value = relY < rect.height / 2 ? 'top' : 'bottom'
+        }
+        break
+      }
+    }
+  }
+
+  const onPointerUp = () => {
+    window.removeEventListener('pointermove', onPointerMove)
+    window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointercancel', onPointerUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+
+    const fromIdx = draggingRemapIndex.value
+    const targetIdx = dragOverRemapIndex.value
+    const pos = dragOverRemapPos.value
+
+    draggingRemapIndex.value = null
+    dragOverRemapIndex.value = null
+    dragOverRemapPos.value = null
+
+    if (fromIdx !== null && targetIdx !== null && config.value.mouse?.mappings) {
+      let toIdx = targetIdx
+      if (pos === 'bottom') {
+        toIdx = targetIdx + 1
+      }
+      if (fromIdx < toIdx) {
+        toIdx--
+      }
+      if (fromIdx !== toIdx) {
+        const list = config.value.mouse.mappings
+        const [movedItem] = list.splice(fromIdx, 1)
+        list.splice(toIdx, 0, movedItem)
+        saveAll()
+      }
+    }
+  }
+
+  window.addEventListener('pointermove', onPointerMove, { passive: false })
+  window.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('pointercancel', onPointerUp)
+}
+
 
 // Key Detector & Unified Remap State
 const isDetectingPadFocused = ref(false)
@@ -3644,6 +3912,54 @@ onMounted(async () => {
 .data-table tr:hover td {
   background: var(--bg-card-subtle);
 }
+
+.drag-handle-cell {
+  width: 40px !important;
+  text-align: center;
+  padding: 0 4px !important;
+}
+
+.drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  cursor: grab;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+  user-select: none;
+  opacity: 0.65;
+}
+
+.drag-handle:hover {
+  opacity: 1;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+tr[draggable="true"] {
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+tr.is-dragging {
+  opacity: 0.35 !important;
+  background: rgba(99, 102, 241, 0.1) !important;
+}
+
+tr.is-drag-over-top td {
+  border-top: 2px solid #6366f1 !important;
+}
+
+tr.is-drag-over-bottom td {
+  border-bottom: 2px solid #6366f1 !important;
+}
+
 
 .type-pill {
   font-size: 11px;

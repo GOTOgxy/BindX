@@ -90,11 +90,22 @@ pub fn run() {
                 }
             });
 
-            // Show window on launch and prevent window close from exiting app: hide to tray
+            // Ensure autostart command line argument is synced
+            if cfg.app.autostart_enabled && autostart::is_autostart_enabled() {
+                let _ = autostart::set_autostart(true);
+            }
+
+            let is_autostart = std::env::args().any(|arg| {
+                arg == "--autostart" || arg == "--minimized" || arg == "-m"
+            });
+
+            // Show window on launch (unless started via autostart with minimize enabled)
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
+                if !is_autostart || !cfg.app.autostart_minimized {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
 
                 let win_clone = window.clone();
                 window.on_window_event(move |event| {

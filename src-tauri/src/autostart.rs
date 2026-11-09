@@ -66,7 +66,7 @@ pub fn set_autostart(enable: bool) -> Result<(), String> {
         let res = if enable {
             let current_exe = std::env::current_exe()
                 .map_err(|e| format!("获取程序路径失败: {}", e))?;
-            let exe_str = format!("\"{}\"", current_exe.to_string_lossy());
+            let exe_str = format!("\"{}\" --autostart", current_exe.to_string_lossy());
             let exe_wide = to_wide_chars(&exe_str);
             let byte_len = (exe_wide.len() * 2) as u32;
 

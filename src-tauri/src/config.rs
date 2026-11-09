@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub font_preset: String,
     #[serde(default = "default_true")]
     pub autostart_enabled: bool,
+    #[serde(default = "default_true")]
+    pub autostart_minimized: bool,
     #[serde(default = "default_output_delay")]
     pub output_delay_ms: u64,
     #[serde(default = "default_true")]
@@ -34,6 +36,7 @@ impl Default for AppConfig {
             window_zoomed: false,
             font_preset: default_font_preset(),
             autostart_enabled: true,
+            autostart_minimized: true,
             output_delay_ms: 20,
             restore_held_modifiers: true,
             theme: default_theme(),
