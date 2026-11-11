@@ -352,7 +352,7 @@
                   <th>目标应用</th>
                   <th>类型</th>
                   <th>行为</th>
-                  <th style="width: 145px;">操作</th>
+                  <th style="width: 110px;">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -404,12 +404,6 @@
                   </td>
                   <td>
                     <div class="table-actions">
-                      <button class="btn-icon" :disabled="index === 0" title="上移" @click="moveHotkey(index, -1)">
-                        <ChevronUp class="w-3.5 h-3.5" />
-                      </button>
-                      <button class="btn-icon" :disabled="index === config.hotkeys.entries.length - 1" title="下移" @click="moveHotkey(index, 1)">
-                        <ChevronDown class="w-3.5 h-3.5" />
-                      </button>
                       <button class="btn-icon" title="编辑" @click="editHotkey(entry, index)">
                         <Edit class="w-3.5 h-3.5" />
                       </button>
@@ -547,7 +541,7 @@
                     <th style="width: 40px; text-align: center;"></th>
                     <th style="width: 220px;">输出按键</th>
                     <th>描述</th>
-                    <th style="width: 145px; text-align: center;">操作</th>
+                    <th style="width: 100px; text-align: center;">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -601,12 +595,6 @@
                     </td>
                     <td style="text-align: center;">
                       <div class="flex items-center justify-center gap-1">
-                        <button class="btn-icon" :disabled="idx === 0" title="上移" @click="moveRemap(idx, -1)">
-                          <ChevronUp class="w-3.5 h-3.5" />
-                        </button>
-                        <button class="btn-icon" :disabled="idx === (config.mouse?.mappings?.length || 0) - 1" title="下移" @click="moveRemap(idx, 1)">
-                          <ChevronDown class="w-3.5 h-3.5" />
-                        </button>
                         <button class="btn-icon" title="编辑映射" @click="openEditRemapModal(km, idx)">
                           <Edit class="w-3.5 h-3.5" />
                         </button>
@@ -1737,9 +1725,7 @@ import {
   Pin,
   LayoutGrid,
   GripVertical,
-  Minimize2,
-  ChevronUp,
-  ChevronDown
+  Minimize2
 } from '@lucide/vue'
 
 const appWindow = getCurrentWindow()
@@ -2366,16 +2352,6 @@ const draggingHotkeyIndex = ref(null)
 const dragOverHotkeyIndex = ref(null)
 const dragOverHotkeyPos = ref(null)
 
-const moveHotkey = (index, delta) => {
-  const targetIndex = index + delta
-  const list = config.value.hotkeys?.entries
-  if (list && targetIndex >= 0 && targetIndex < list.length) {
-    const [item] = list.splice(index, 1)
-    list.splice(targetIndex, 0, item)
-    saveAll()
-  }
-}
-
 const startHotkeyDrag = (e, index) => {
   if (e.button !== 0) return
   e.preventDefault()
@@ -2462,16 +2438,6 @@ const startHotkeyDrag = (e, index) => {
 const draggingRemapIndex = ref(null)
 const dragOverRemapIndex = ref(null)
 const dragOverRemapPos = ref(null)
-
-const moveRemap = (index, delta) => {
-  const targetIndex = index + delta
-  const list = config.value.mouse?.mappings
-  if (list && targetIndex >= 0 && targetIndex < list.length) {
-    const [item] = list.splice(index, 1)
-    list.splice(targetIndex, 0, item)
-    saveAll()
-  }
-}
 
 const startRemapDrag = (e, index) => {
   if (e.button !== 0) return
