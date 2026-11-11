@@ -230,8 +230,30 @@ pub fn normalize_exe_name(raw: &str) -> String {
     }
 }
 
+fn parse_pwa_family(family_name: &str) -> Option<(&str, &str)> {
+    let (prefix, _pub_id) = family_name.split_once('_')?;
+    let (domain, hash) = prefix.rsplit_once('-')?;
+    if domain.contains('.') && hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some((domain, hash))
+    } else {
+        None
+    }
+}
+
+fn is_pwa_aumid(aumid: &str) -> bool {
+    let trimmed = aumid.trim();
+    if let Some(family) = trimmed.strip_suffix("!App").or_else(|| trimmed.strip_suffix("!app")) {
+        parse_pwa_family(family).is_some()
+    } else {
+        false
+    }
+}
+
 pub fn is_pwa_window(hwnd: HWND) -> bool {
     if let Some(aumid) = window_aumid(hwnd) {
+        if is_pwa_aumid(&aumid) {
+            return true;
+        }
         let a = aumid.to_lowercase();
         if a.ends_with("!app") && (a.contains('-') || a.contains('.')) {
             return true;
@@ -953,53 +975,53 @@ fn save_web_apps_cache(cache: &[InstalledWebApp]) {
 /// app processes right now) merged with the on-disk profile registry and any
 /// shortcut URL pairings.
 pub fn refresh_installed_web_apps() -> Vec<InstalledWebApp> {
-    let mut apps = load_web_apps_cache();
-    let mut changed = false;
+    let reg_pwas = list_windows_pwa_apps();
+    let running_apps = harvest_running_web_apps();
+    let old_cache = load_web_apps_cache();
 
-    // 1. Windows AppModel PWA Registry (most reliable on Windows 10/11)
-    for pwa in list_windows_pwa_apps() {
-        match apps.iter_mut().find(|c| (!c.aumid.is_empty() && c.aumid == pwa.aumid) || (!c.id.is_empty() && c.id == pwa.id)) {
-            Some(slot) => {
-                if slot.aumid.is_empty() && !pwa.aumid.is_empty() {
-                    slot.aumid = pwa.aumid;
-                    changed = true;
-                }
-                if slot.name.is_empty() && !pwa.name.is_empty() {
-                    slot.name = pwa.name;
-                    changed = true;
-                }
-                if slot.app_url.is_empty() && !pwa.app_url.is_empty() {
-                    slot.app_url = pwa.app_url;
-                    changed = true;
-                }
+    // 1. Live Windows AppModel PWA Registry comes FIRST (authoritative, reflects uninstall/reinstall)
+    let mut apps: Vec<InstalledWebApp> = reg_pwas.clone();
+
+    // 2. Merge live open web app windows
+    for h in &running_apps {
+        if let Some(slot) = apps.iter_mut().find(|c| {
+            (!c.aumid.is_empty() && c.aumid == h.aumid) || (c.id == h.id && c.profile == h.profile)
+        }) {
+            if slot.app_url.is_empty() && !h.app_url.is_empty() {
+                slot.app_url = h.app_url.clone();
             }
-            None => {
-                apps.push(pwa);
-                changed = true;
+            if slot.name.is_empty() && !h.name.is_empty() {
+                slot.name = h.name.clone();
             }
+        } else {
+            apps.push(h.clone());
         }
     }
-    for h in harvest_running_web_apps() {
-        match apps.iter_mut().find(|c| c.id == h.id && c.profile == h.profile) {
-            Some(slot) => {
-                if slot.app_url.is_empty() && !h.app_url.is_empty() {
-                    slot.app_url = h.app_url;
-                    changed = true;
-                }
-                if slot.name.is_empty() && !h.name.is_empty() {
-                    slot.name = h.name;
-                    changed = true;
-                }
-            }
-            None => {
-                apps.push(h);
-                changed = true;
+
+    // 3. Retain cached entries only if they are still valid (purge uninstalled/dead AUMIDs and non-PWA UWP pollution)
+    for cached in &old_cache {
+        if cached.aumid.ends_with("!App") || cached.aumid.ends_with("!app") {
+            let still_installed = reg_pwas.iter().any(|p| p.aumid == cached.aumid)
+                || running_apps.iter().any(|h| h.aumid == cached.aumid);
+            if !still_installed || !is_pwa_aumid(&cached.aumid) {
+                continue;
             }
         }
+        if !apps.iter().any(|a| {
+            (!a.aumid.is_empty() && a.aumid == cached.aumid) || (a.id == cached.id && a.profile == cached.profile)
+        }) {
+            apps.push(cached.clone());
+        }
     }
-    if changed {
+
+    let cache_changed = apps.len() != old_cache.len()
+        || apps.iter().zip(old_cache.iter()).any(|(a, b)| {
+            a.aumid != b.aumid || a.id != b.id || a.name != b.name || a.app_url != b.app_url
+        });
+    if cache_changed {
         save_web_apps_cache(&apps);
     }
+
     for reg in list_installed_web_apps() {
         match apps.iter_mut().find(|a| a.id == reg.id && a.profile == reg.profile) {
             Some(slot) => {
@@ -1174,25 +1196,21 @@ pub fn list_windows_pwa_apps() -> Vec<InstalledWebApp> {
 
             let family_name = OsString::from_wide(&name_buf[..name_len as usize]).to_string_lossy().to_string();
 
-            // PWA family names typically follow: <domain.tld>-<HASH>_<PUBLISHER_ID>
-            // E.g. "chatgpt.com-DFCB3CE4_ch69rtgtz055j" or "www.qianwen.com-E1134EAD_gr2d9dnezjevw"
-            if !family_name.contains('.') || !family_name.contains('_') || !family_name.contains('-') {
+            // PWA family names strictly follow: <domain.tld>-<8-HEX-HASH>_<PUBLISHER_ID>
+            // E.g. "chatgpt.com-DFCB3CE4_ch69rtgtz055j" or "www.qianwen.com-A99A5E84_gr2d9dnezjevw"
+            let Some((domain, _hash)) = parse_pwa_family(&family_name) else {
                 continue;
-            }
+            };
 
             let aumid = format!("{}!App", family_name);
-
-            // Extract domain for app_url
-            // E.g. "chatgpt.com-DFCB3CE4" -> "chatgpt.com"
-            let prefix = family_name.split('_').next().unwrap_or(&family_name);
-            let domain = prefix.split('-').next().unwrap_or(prefix);
             let app_url = format!("https://{}/", domain);
 
-            // Open the family subkey to get the package full name
+            // Open the family subkey to verify an installed package exists and read its DisplayName
             let family_sub_path = format!("{}\\{}", families_path, family_name);
             let family_sub_wide: Vec<u16> = family_sub_path.encode_utf16().chain(std::iter::once(0)).collect();
             let mut h_family_sub = HKEY::default();
             let mut display_name = String::new();
+            let mut has_installed_pkg = false;
 
             if RegOpenKeyExW(
                 HKEY_CURRENT_USER,
@@ -1224,6 +1242,7 @@ pub fn list_windows_pwa_apps() -> Vec<InstalledWebApp> {
                         KEY_READ,
                         &mut h_pkg,
                     ).is_ok() {
+                        has_installed_pkg = true;
                         if let Some(dn) = reg_string(h_pkg, "DisplayName") {
                             display_name = dn;
                         }
@@ -1231,6 +1250,10 @@ pub fn list_windows_pwa_apps() -> Vec<InstalledWebApp> {
                     }
                 }
                 let _ = RegCloseKey(h_family_sub);
+            }
+
+            if !has_installed_pkg {
+                continue;
             }
 
             if display_name.is_empty() {
